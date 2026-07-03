@@ -26,15 +26,15 @@ model User {
   status    UserStatus @default(ACTIVE)
   version   Int        @default(1)
 
-  roles     UserRole[]
+  roles UserRole[]
 
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Role {
-  id    String   @id @default(cuid())
-  name  RoleName @unique
+  id   String   @id @default(cuid())
+  name RoleName @unique
 
   users UserRole[]
 }
@@ -47,4 +47,52 @@ model UserRole {
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
+}
+
+enum AttributeCategory {
+  PERSONAL_INFORMATION
+  CERTIFICATION
+  DOMAIN_KNOWLEDGE
+  SOFT_SKILLS
+  TECHNICAL_SKILLS
+  LANGUAGE
+  EDUCATION
+  EXPERIENCE
+  OTHER
+}
+
+enum AttributeType {
+  STRING
+  TEXT
+  IMAGE
+  NUMERIC
+  DATE
+  PERIOD
+  BOOLEAN
+  SELECT
+}
+
+model Attribute {
+  id          Int               @id @default(autoincrement())
+  name        String            @unique
+  category    AttributeCategory
+  type        AttributeType
+  description String?
+  version     Int               @default(1)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  options AttributeOption[]
+}
+
+model AttributeOption {
+  id          Int      @id @default(autoincrement())
+  attributeId Int
+  value       String
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@unique([attributeId, value])
 }
