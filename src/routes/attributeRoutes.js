@@ -100,4 +100,69 @@ router.delete("/", async (req, res) => {
   }
 });
 
+router.put("/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { name, category, type, description, version, options } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        message: "Valid attribute id is required",
+      });
+    }
+
+    if (!name || !category || !type || typeof version !== "number") {
+      return res.status(400).json({
+        message: "Name, category, type, and version are required",
+      });
+    }
+
+    const updateResult = await prisma.attribute.updateMany({
+      where: {
+        id,
+        version,
+      },
+      data: {
+        name,
+        category,
+        type,
+        description: description || null,
+        version: {
+          increment: 1,
+        },
+      },
+    });
+
+    if (updateResult.count === 0) {
+      return res.status(409).json({
+        message:
+          "Attribute was changed by someone else. Please reload and try again.",
+      });
+    }
+
+    const updatedAttribute = await prisma.attribute.findUnique({
+      where: { id },
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    res.json(updatedAttribute);
+  } catch (error) {
+    console.error("PUT /api/attributes/:id error:", error);
+
+    if (error.code === "P2002") {
+      return res.status(409).json({
+        message: "Attribute with this name already exists",
+      });
+    }
+
+    res.status(500).json({
+      message: "Failed to update attribute",
+    });
+  }
+});
+
 module.exports = router;
