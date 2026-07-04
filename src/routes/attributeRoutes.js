@@ -140,6 +140,32 @@ router.put("/:id", async (req, res) => {
       });
     }
 
+    if (type === "SELECT" && Array.isArray(options)) {
+      const cleanOptions = options
+        .map((option) => option.value?.trim())
+        .filter(Boolean);
+
+      await prisma.attributeOption.deleteMany({
+        where: { attributeId: id },
+      });
+
+      if (cleanOptions.length > 0) {
+        await prisma.attributeOption.createMany({
+          data: cleanOptions.map((value, index) => ({
+            attributeId: id,
+            value,
+            sortOrder: index + 1,
+          })),
+        });
+      }
+    }
+
+    if (type !== "SELECT") {
+      await prisma.attributeOption.deleteMany({
+        where: { attributeId: id },
+      });
+    }
+
     const updatedAttribute = await prisma.attribute.findUnique({
       where: { id },
       include: {
