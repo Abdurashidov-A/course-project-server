@@ -1,12 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const prisma = require("./lib/prisma");
-
+const attributeRoutes = require("./routes/attributeRoutes");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use("/api/attributes", attributeRoutes);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");

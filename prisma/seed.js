@@ -61,6 +61,49 @@ async function main() {
     skipDuplicates: true,
   });
 
+  await prisma.attribute.upsert({
+    where: { name: "English Level" },
+    update: {},
+    create: {
+      name: "English Level",
+      category: "LANGUAGE",
+      type: "SELECT",
+      description: "Candidate English proficiency level",
+      options: {
+        create: [
+          { value: "A1", sortOrder: 1 },
+          { value: "A2", sortOrder: 2 },
+          { value: "B1", sortOrder: 3 },
+          { value: "B2", sortOrder: 4 },
+          { value: "C1", sortOrder: 5 },
+          { value: "C2", sortOrder: 6 },
+        ],
+      },
+    },
+  });
+
+  await prisma.attribute.upsert({
+    where: { name: "IELTS Score" },
+    update: {},
+    create: {
+      name: "IELTS Score",
+      category: "CERTIFICATION",
+      type: "NUMERIC",
+      description: "IELTS exam score",
+    },
+  });
+
+  await prisma.attribute.upsert({
+    where: { name: "Remote Work Availability" },
+    update: {},
+    create: {
+      name: "Remote Work Availability",
+      category: "PERSONAL_INFORMATION",
+      type: "BOOLEAN",
+      description: "Whether candidate is available for remote work",
+    },
+  });
+
   console.log("Seed completed");
 }
 
