@@ -21,4 +21,83 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.post("/", async (req, res) => {
+  try {
+    const { name, category, type, description, options } = req.body;
+
+    if (!name || !category || !type) {
+      return res.status(400).json({
+        message: "Name, category, and type are required",
+      });
+    }
+
+    const attribute = await prisma.attribute.create({
+      data: {
+        name,
+        category,
+        type,
+        description: description || null,
+        options: {
+          create:
+            type === "SELECT" && Array.isArray(options)
+              ? options.map((option, index) => ({
+                  value: option.value,
+                  sortOrder: index + 1,
+                }))
+              : [],
+        },
+      },
+      include: {
+        options: {
+          orderBy: { sortOrder: "asc" },
+        },
+      },
+    });
+
+    res.status(201).json(attribute);
+  } catch (error) {
+    console.error("POST /api/attributes error:", error);
+
+    if (error.code === "P2002") {
+      return res.status(409).json({
+        message: "Attribute with this name already exists",
+      });
+    }
+
+    res.status(500).json({
+      message: "Failed to create attribute",
+    });
+  }
+});
+
+router.delete("/", async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        message: "Attribute ids are required",
+      });
+    }
+
+    const deletedAttributes = await prisma.attribute.deleteMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+    });
+
+    res.json({
+      deletedCount: deletedAttributes.count,
+    });
+  } catch (error) {
+    console.error("DELETE /api/attributes error:", error);
+
+    res.status(500).json({
+      message: "Failed to delete attributes",
+    });
+  }
+});
+
 module.exports = router;
