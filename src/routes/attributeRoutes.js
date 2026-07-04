@@ -5,7 +5,18 @@ const router = express.Router();
 
 router.get("/", async (req, res) => {
   try {
+    const { search, category } = req.query;
+
     const attributes = await prisma.attribute.findMany({
+      where: {
+        name: search
+          ? {
+              startsWith: search,
+              mode: "insensitive",
+            }
+          : undefined,
+        category: category || undefined,
+      },
       orderBy: [{ category: "asc" }, { name: "asc" }],
       include: {
         options: {
