@@ -26,7 +26,8 @@ model User {
   status    UserStatus @default(ACTIVE)
   version   Int        @default(1)
 
-  roles UserRole[]
+  roles                  UserRole[]
+  profileAttributeValues ProfileAttributeValue[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -84,6 +85,7 @@ model Attribute {
 
   options            AttributeOption[]
   positionAttributes PositionAttribute[]
+  profileValues      ProfileAttributeValue[]
 }
 
 model AttributeOption {
@@ -123,4 +125,29 @@ model PositionAttribute {
   attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
 
   @@unique([positionId, attributeId])
+}
+
+model ProfileAttributeValue {
+  id Int @id @default(autoincrement())
+
+  userId      String
+  attributeId Int
+
+  stringValue  String?
+  textValue    String?
+  numericValue Float?
+  booleanValue Boolean?
+  dateValue    DateTime?
+  periodStart  DateTime?
+  periodEnd    DateTime?
+  imageUrl     String?
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, attributeId])
 }
