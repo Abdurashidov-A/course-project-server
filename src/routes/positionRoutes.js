@@ -76,6 +76,90 @@ router.post("/", async (req, res) => {
   }
 });
 
+router.put("/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const {
+      title,
+      shortDescription,
+      isPublic = true,
+      maxProjects = 3,
+      version,
+      attributes = [],
+    } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        message: "Valid position id is required",
+      });
+    }
+
+    if (!title || typeof version !== "number") {
+      return res.status(400).json({
+        message: "Title and version are required",
+      });
+    }
+
+    const updateResult = await prisma.position.updateMany({
+      where: {
+        id,
+        version,
+      },
+      data: {
+        title,
+        shortDescription: shortDescription || null,
+        isPublic,
+        maxProjects: Number(maxProjects) || 3,
+        version: {
+          increment: 1,
+        },
+      },
+    });
+
+    if (updateResult.count === 0) {
+      return res.status(409).json({
+        message:
+          "Position was changed by someone else. Please reload and try again.",
+      });
+    }
+
+    await prisma.positionAttribute.deleteMany({
+      where: { positionId: id },
+    });
+
+    if (attributes.length > 0) {
+      await prisma.positionAttribute.createMany({
+        data: attributes.map((item, index) => ({
+          positionId: id,
+          attributeId: item.attributeId,
+          isRequired: Boolean(item.isRequired),
+          sortOrder: index + 1,
+        })),
+      });
+    }
+
+    const updatedPosition = await prisma.position.findUnique({
+      where: { id },
+      include: {
+        attributes: {
+          orderBy: { sortOrder: "asc" },
+          include: {
+            attribute: true,
+          },
+        },
+      },
+    });
+
+    res.json(updatedPosition);
+  } catch (error) {
+    console.error("PUT /api/positions/:id error:", error);
+
+    res.status(500).json({
+      message: "Failed to update position",
+    });
+  }
+});
+
 router.delete("/", async (req, res) => {
   try {
     const { ids } = req.body;
