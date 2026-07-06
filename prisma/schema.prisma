@@ -82,7 +82,8 @@ model Attribute {
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
-  options AttributeOption[]
+  options            AttributeOption[]
+  positionAttributes PositionAttribute[]
 }
 
 model AttributeOption {
@@ -95,4 +96,31 @@ model AttributeOption {
   attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
 
   @@unique([attributeId, value])
+}
+
+model Position {
+  id               Int      @id @default(autoincrement())
+  title            String
+  shortDescription String?
+  isPublic         Boolean  @default(true)
+  maxProjects      Int      @default(3)
+  version          Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  attributes PositionAttribute[]
+}
+
+model PositionAttribute {
+  id          Int      @id @default(autoincrement())
+  positionId  Int
+  attributeId Int
+  isRequired  Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+
+  @@unique([positionId, attributeId])
 }

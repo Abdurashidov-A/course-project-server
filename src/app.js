@@ -8,6 +8,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use("/api/attributes", attributeRoutes);
+const positionRoutes = require("./routes/positionRoutes");
+
+app.use("/api/positions", positionRoutes);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");
