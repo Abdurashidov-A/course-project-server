@@ -76,4 +76,34 @@ router.post("/", async (req, res) => {
   }
 });
 
+router.delete("/", async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        message: "Position ids are required",
+      });
+    }
+
+    const deletedPositions = await prisma.position.deleteMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+    });
+
+    res.json({
+      deletedCount: deletedPositions.count,
+    });
+  } catch (error) {
+    console.error("DELETE /api/positions error:", error);
+
+    res.status(500).json({
+      message: "Failed to delete positions",
+    });
+  }
+});
+
 module.exports = router;
