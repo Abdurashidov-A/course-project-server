@@ -5,6 +5,7 @@ const attributeRoutes = require("./routes/attributeRoutes");
 const profileAttributeRoutes = require("./routes/profileAttributeRoutes");
 const positionRoutes = require("./routes/positionRoutes");
 const cvRoutes = require("./routes/cvRoutes");
+const projectRoutes = require("./routes/projectRoutes");
 const app = express();
 
 app.use(cors());
@@ -13,6 +14,7 @@ app.use("/api/attributes", attributeRoutes);
 app.use("/api/profile-attributes", profileAttributeRoutes);
 app.use("/api/positions", positionRoutes);
 app.use("/api/cvs", cvRoutes);
+app.use("/api/projects", projectRoutes);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");
