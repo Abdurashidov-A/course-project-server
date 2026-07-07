@@ -7,6 +7,42 @@ function getDevUserId(req) {
   return req.header("x-dev-user-id") || null;
 }
 
+function isAttributeValueMissing(attributeType, value) {
+  if (!value) {
+    return true;
+  }
+
+  if (attributeType === "STRING" || attributeType === "SELECT") {
+    return value.stringValue === null || value.stringValue === "";
+  }
+
+  if (attributeType === "TEXT") {
+    return value.textValue === null || value.textValue === "";
+  }
+
+  if (attributeType === "NUMERIC") {
+    return value.numericValue === null;
+  }
+
+  if (attributeType === "BOOLEAN") {
+    return value.booleanValue === null;
+  }
+
+  if (attributeType === "DATE") {
+    return value.dateValue === null;
+  }
+
+  if (attributeType === "PERIOD") {
+    return value.periodStart === null || value.periodEnd === null;
+  }
+
+  if (attributeType === "IMAGE") {
+    return value.imageUrl === null || value.imageUrl === "";
+  }
+
+  return true;
+}
+
 router.get("/my", async (req, res) => {
   try {
     const userId = getDevUserId(req);
@@ -34,6 +70,135 @@ router.get("/my", async (req, res) => {
     console.error("GET /api/cvs/my error:", error);
     res.status(500).json({
       message: "Failed to load CVs",
+    });
+  }
+});
+
+router.get("/:id", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const cvId = Number(req.params.id);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(cvId)) {
+      return res.status(404).json({
+        message: "CV not found",
+      });
+    }
+
+    const cv = await prisma.cv.findUnique({
+      where: {
+        id: cvId,
+      },
+      include: {
+        position: {
+          include: {
+            attributes: {
+              orderBy: {
+                sortOrder: "asc",
+              },
+              include: {
+                attribute: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!cv) {
+      return res.status(404).json({
+        message: "CV not found",
+      });
+    }
+
+    if (cv.userId !== userId) {
+      return res.status(403).json({
+        message: "You do not have access to this CV",
+      });
+    }
+
+    const attributeIds = cv.position.attributes.map((item) => item.attributeId);
+
+    const profileValues = attributeIds.length
+      ? await prisma.profileAttributeValue.findMany({
+          where: {
+            userId,
+            attributeId: {
+              in: attributeIds,
+            },
+          },
+        })
+      : [];
+
+    const profileValuesByAttributeId = new Map(
+      profileValues.map((value) => [value.attributeId, value]),
+    );
+
+    const response = {
+      id: cv.id,
+      status: cv.status,
+      version: cv.version,
+      createdAt: cv.createdAt,
+      updatedAt: cv.updatedAt,
+      position: {
+        id: cv.position.id,
+        title: cv.position.title,
+        shortDescription: cv.position.shortDescription,
+        maxProjects: cv.position.maxProjects,
+      },
+      attributes: cv.position.attributes.map((item) => {
+        const value = profileValuesByAttributeId.get(item.attributeId) || null;
+
+        return {
+          positionAttributeId: item.id,
+          attributeId: item.attribute.id,
+          name: item.attribute.name,
+          category: item.attribute.category,
+          type: item.attribute.type,
+          description: item.attribute.description,
+          isRequired: item.isRequired,
+          sortOrder: item.sortOrder,
+          value: value
+            ? {
+                id: value.id,
+                stringValue: value.stringValue,
+                textValue: value.textValue,
+                numericValue: value.numericValue,
+                booleanValue: value.booleanValue,
+                dateValue: value.dateValue,
+                periodStart: value.periodStart,
+                periodEnd: value.periodEnd,
+                imageUrl: value.imageUrl,
+                version: value.version,
+              }
+            : {
+                id: null,
+                stringValue: null,
+                textValue: null,
+                numericValue: null,
+                booleanValue: null,
+                dateValue: null,
+                periodStart: null,
+                periodEnd: null,
+                imageUrl: null,
+                version: null,
+              },
+          isMissing: isAttributeValueMissing(item.attribute.type, value),
+        };
+      }),
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error("GET /api/cvs/:id error:", error);
+    res.status(500).json({
+      message: "Failed to load CV preview data",
     });
   }
 });
