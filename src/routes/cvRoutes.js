@@ -84,6 +84,31 @@ async function getProfileValuesByAttributeId(userId, positionAttributes) {
   return new Map(profileValues.map((value) => [value.attributeId, value]));
 }
 
+async function getProjectsForCvOwner(userId, maxProjects) {
+  const take =
+    Number.isInteger(maxProjects) && maxProjects > 0 ? maxProjects : 3;
+
+  return prisma.project.findMany({
+    where: {
+      userId,
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+    take,
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      periodStart: true,
+      periodEnd: true,
+      technologyTags: true,
+      version: true,
+      updatedAt: true,
+    },
+  });
+}
+
 async function getCurrentUserWithRoles(userId) {
   return prisma.user.findUnique({
     where: { id: userId },
@@ -180,6 +205,10 @@ router.get("/:id", async (req, res) => {
       cv.userId,
       cv.position.attributes,
     );
+    const projects = await getProjectsForCvOwner(
+      cv.userId,
+      cv.position.maxProjects,
+    );
 
     const viewerRole = isOwner && isCandidate
       ? "CANDIDATE"
@@ -201,6 +230,7 @@ router.get("/:id", async (req, res) => {
         shortDescription: cv.position.shortDescription,
         maxProjects: cv.position.maxProjects,
       },
+      projects,
       attributes: cv.position.attributes.map((item) => {
         const value = profileValuesByAttributeId.get(item.attributeId) || null;
 
