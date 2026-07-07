@@ -3,15 +3,16 @@ const cors = require("cors");
 const prisma = require("./lib/prisma");
 const attributeRoutes = require("./routes/attributeRoutes");
 const profileAttributeRoutes = require("./routes/profileAttributeRoutes");
+const positionRoutes = require("./routes/positionRoutes");
+const cvRoutes = require("./routes/cvRoutes");
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 app.use("/api/attributes", attributeRoutes);
 app.use("/api/profile-attributes", profileAttributeRoutes);
-const positionRoutes = require("./routes/positionRoutes");
-
 app.use("/api/positions", positionRoutes);
+app.use("/api/cvs", cvRoutes);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");
