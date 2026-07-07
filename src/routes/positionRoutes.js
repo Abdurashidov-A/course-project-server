@@ -3,6 +3,23 @@ const prisma = require("../lib/prisma");
 
 const router = express.Router();
 
+function getDevUserId(req) {
+  return req.header("x-dev-user-id") || null;
+}
+
+async function getCurrentUserWithRoles(userId) {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      roles: {
+        include: {
+          role: true,
+        },
+      },
+    },
+  });
+}
+
 router.get("/", async (req, res) => {
   try {
     const positions = await prisma.position.findMany({
@@ -22,6 +39,101 @@ router.get("/", async (req, res) => {
     console.error("GET /api/positions error:", error);
     res.status(500).json({
       message: "Failed to load positions",
+    });
+  }
+});
+
+router.get("/:positionId/cvs", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const positionId = Number(req.params.positionId);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(positionId) || positionId <= 0) {
+      return res.status(400).json({
+        message: "Valid position id is required",
+      });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        message: "Current user not found",
+      });
+    }
+
+    const roleNames = currentUser.roles.map((userRole) => userRole.role.name);
+    const canAccess =
+      roleNames.includes("RECRUITER") || roleNames.includes("ADMIN");
+
+    if (!canAccess) {
+      return res.status(403).json({
+        message: "You do not have access to published CVs for this position",
+      });
+    }
+
+    const position = await prisma.position.findUnique({
+      where: {
+        id: positionId,
+      },
+      select: {
+        id: true,
+        title: true,
+        shortDescription: true,
+      },
+    });
+
+    if (!position) {
+      return res.status(404).json({
+        message: "Position not found",
+      });
+    }
+
+    const cvs = await prisma.cv.findMany({
+      where: {
+        positionId,
+        status: "PUBLISHED",
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+      select: {
+        id: true,
+        status: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.json({
+      position,
+      cvs: cvs.map((cv) => ({
+        id: cv.id,
+        status: cv.status,
+        version: cv.version,
+        createdAt: cv.createdAt,
+        updatedAt: cv.updatedAt,
+        candidate: cv.user,
+      })),
+    });
+  } catch (error) {
+    console.error("GET /api/positions/:positionId/cvs error:", error);
+    res.status(500).json({
+      message: "Failed to load published CVs for this position",
     });
   }
 });
