@@ -84,6 +84,19 @@ async function getProfileValuesByAttributeId(userId, positionAttributes) {
   return new Map(profileValues.map((value) => [value.attributeId, value]));
 }
 
+async function getCurrentUserWithRoles(userId) {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      roles: {
+        include: {
+          role: true,
+        },
+      },
+    },
+  });
+}
+
 router.get("/my", async (req, res) => {
   try {
     const userId = getDevUserId(req);
@@ -132,6 +145,14 @@ router.get("/:id", async (req, res) => {
       });
     }
 
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(401).json({
+        message: "Current user not found",
+      });
+    }
+
     const cv = await getCvWithPositionAttributes(cvId);
 
     if (!cv) {
@@ -140,16 +161,31 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    if (cv.userId !== userId) {
+    const roleNames = currentUser.roles.map((userRole) => userRole.role.name);
+    const isAdmin = roleNames.includes("ADMIN");
+    const isRecruiter = roleNames.includes("RECRUITER");
+    const isCandidate = roleNames.includes("CANDIDATE");
+    const isOwner = cv.userId === userId;
+
+    const canAccess =
+      (isCandidate && isOwner) || isAdmin || (isRecruiter && cv.status === "PUBLISHED");
+
+    if (!canAccess) {
       return res.status(403).json({
         message: "You do not have access to this CV",
       });
     }
 
     const profileValuesByAttributeId = await getProfileValuesByAttributeId(
-      userId,
+      cv.userId,
       cv.position.attributes,
     );
+
+    const viewerRole = isOwner && isCandidate
+      ? "CANDIDATE"
+      : isAdmin
+        ? "ADMIN"
+        : "RECRUITER";
 
     const response = {
       id: cv.id,
@@ -157,6 +193,8 @@ router.get("/:id", async (req, res) => {
       version: cv.version,
       createdAt: cv.createdAt,
       updatedAt: cv.updatedAt,
+      viewerRole,
+      canEditValues: viewerRole === "CANDIDATE",
       position: {
         id: cv.position.id,
         title: cv.position.title,
