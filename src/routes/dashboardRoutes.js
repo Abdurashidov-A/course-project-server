@@ -113,6 +113,128 @@ function getFilledProfileAttributesWhere(userId) {
   };
 }
 
+async function getPopularPositions(positionWhere) {
+  const positions = await prisma.position.findMany({
+    where: positionWhere,
+    select: {
+      id: true,
+      title: true,
+      shortDescription: true,
+      updatedAt: true,
+    },
+  });
+
+  if (positions.length === 0) {
+    return [];
+  }
+
+  const positionIds = positions.map((position) => position.id);
+
+  const [submittedCounts, publishedCounts] = await Promise.all([
+    prisma.cv.groupBy({
+      by: ["positionId"],
+      where: {
+        positionId: {
+          in: positionIds,
+        },
+      },
+      _count: {
+        positionId: true,
+      },
+    }),
+    prisma.cv.groupBy({
+      by: ["positionId"],
+      where: {
+        positionId: {
+          in: positionIds,
+        },
+        status: "PUBLISHED",
+      },
+      _count: {
+        positionId: true,
+      },
+    }),
+  ]);
+
+  const submittedByPositionId = new Map(
+    submittedCounts.map((item) => [item.positionId, item._count.positionId]),
+  );
+  const publishedByPositionId = new Map(
+    publishedCounts.map((item) => [item.positionId, item._count.positionId]),
+  );
+
+  const positionsWithCounts = positions.map((position) => ({
+    id: position.id,
+    title: position.title,
+    shortDescription: position.shortDescription,
+    updatedAt: position.updatedAt,
+    submittedCvsCount: submittedByPositionId.get(position.id) || 0,
+    publishedCvsCount: publishedByPositionId.get(position.id) || 0,
+  }));
+
+  const hasAnySubmittedCvs = positionsWithCounts.some(
+    (position) => position.submittedCvsCount > 0,
+  );
+
+  const sortedPositions = hasAnySubmittedCvs
+    ? positionsWithCounts.sort((left, right) => {
+        if (right.submittedCvsCount !== left.submittedCvsCount) {
+          return right.submittedCvsCount - left.submittedCvsCount;
+        }
+
+        return left.title.localeCompare(right.title);
+      })
+    : positionsWithCounts.sort(
+        (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
+      );
+
+  return sortedPositions.slice(0, 5).map(({ updatedAt, ...position }) => position);
+}
+
+async function getTechnologyTagCloud(positionWhere) {
+  const positions = await prisma.position.findMany({
+    where: positionWhere,
+    select: {
+      projectTags: true,
+    },
+  });
+
+  const tagsMap = new Map();
+
+  positions.forEach((position) => {
+    const uniqueTags = new Set(
+      (position.projectTags || [])
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    );
+
+    uniqueTags.forEach((tag) => {
+      const normalizedTag = tag.toLowerCase();
+      const existing = tagsMap.get(normalizedTag);
+
+      if (existing) {
+        existing.count += 1;
+        return;
+      }
+
+      tagsMap.set(normalizedTag, {
+        tag,
+        count: 1,
+      });
+    });
+  });
+
+  return [...tagsMap.values()]
+    .sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+
+      return left.tag.localeCompare(right.tag);
+    })
+    .slice(0, 15);
+}
+
 async function buildCandidateDashboard(userId) {
   const [
     totalCvs,
@@ -123,6 +245,8 @@ async function buildCandidateDashboard(userId) {
     filledProfileAttributes,
     recentCvs,
     recentProjects,
+    popularPositions,
+    technologyTagCloud,
   ] = await Promise.all([
     prisma.cv.count({
       where: { userId },
@@ -181,6 +305,12 @@ async function buildCandidateDashboard(userId) {
         version: true,
       },
     }),
+    getPopularPositions({
+      isPublic: true,
+    }),
+    getTechnologyTagCloud({
+      isPublic: true,
+    }),
   ]);
 
   return {
@@ -199,6 +329,8 @@ async function buildCandidateDashboard(userId) {
     },
     recentCvs,
     recentProjects,
+    popularPositions,
+    technologyTagCloud,
   };
 }
 
@@ -211,6 +343,8 @@ async function buildRecruiterDashboard(role) {
     candidatesWithPublishedCvsGroups,
     recentPublishedCvs,
     recentPositions,
+    popularPositions,
+    technologyTagCloud,
   ] = await Promise.all([
     prisma.position.count(),
     prisma.attribute.count(),
@@ -274,6 +408,8 @@ async function buildRecruiterDashboard(role) {
         updatedAt: true,
       },
     }),
+    getPopularPositions(),
+    getTechnologyTagCloud(),
   ]);
 
   return {
@@ -295,6 +431,8 @@ async function buildRecruiterDashboard(role) {
       position: cv.position,
     })),
     recentPositions,
+    popularPositions,
+    technologyTagCloud,
   };
 }
 
