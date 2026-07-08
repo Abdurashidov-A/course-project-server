@@ -20,6 +20,18 @@ async function getCurrentUserWithRoles(userId) {
   });
 }
 
+function sanitizeProjectTags(tags) {
+  if (tags === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string")) {
+    return null;
+  }
+
+  return [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
+}
+
 router.get("/", async (req, res) => {
   try {
     const positions = await prisma.position.findMany({
@@ -86,6 +98,7 @@ router.get("/:positionId/cvs", async (req, res) => {
         id: true,
         title: true,
         shortDescription: true,
+        projectTags: true,
       },
     });
 
@@ -145,6 +158,7 @@ router.post("/", async (req, res) => {
       shortDescription,
       isPublic = true,
       maxProjects = 3,
+      projectTags = [],
       attributes = [],
     } = req.body;
 
@@ -154,12 +168,21 @@ router.post("/", async (req, res) => {
       });
     }
 
+    const sanitizedProjectTags = sanitizeProjectTags(projectTags);
+
+    if (sanitizedProjectTags === null) {
+      return res.status(400).json({
+        message: "projectTags must be an array of strings",
+      });
+    }
+
     const position = await prisma.position.create({
       data: {
         title,
         shortDescription: shortDescription || null,
         isPublic,
         maxProjects: Number(maxProjects) || 3,
+        projectTags: sanitizedProjectTags,
         attributes: {
           create: attributes.map((item, index) => ({
             attributeId: item.attributeId,
@@ -196,6 +219,7 @@ router.put("/:id", async (req, res) => {
       shortDescription,
       isPublic = true,
       maxProjects = 3,
+      projectTags = [],
       version,
       attributes = [],
     } = req.body;
@@ -212,6 +236,14 @@ router.put("/:id", async (req, res) => {
       });
     }
 
+    const sanitizedProjectTags = sanitizeProjectTags(projectTags);
+
+    if (sanitizedProjectTags === null) {
+      return res.status(400).json({
+        message: "projectTags must be an array of strings",
+      });
+    }
+
     const updateResult = await prisma.position.updateMany({
       where: {
         id,
@@ -222,6 +254,7 @@ router.put("/:id", async (req, res) => {
         shortDescription: shortDescription || null,
         isPublic,
         maxProjects: Number(maxProjects) || 3,
+        projectTags: sanitizedProjectTags,
         version: {
           increment: 1,
         },

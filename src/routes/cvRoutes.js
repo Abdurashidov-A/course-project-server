@@ -109,6 +109,48 @@ async function getProjectsForCvOwner(userId, maxProjects) {
   });
 }
 
+async function getFilteredProjectsForCvOwner(userId, position) {
+  const take =
+    Number.isInteger(position?.maxProjects) && position.maxProjects > 0
+      ? position.maxProjects
+      : 3;
+
+  const projects = await prisma.project.findMany({
+    where: {
+      userId,
+    },
+    orderBy: {
+      updatedAt: "desc",
+    },
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      periodStart: true,
+      periodEnd: true,
+      technologyTags: true,
+      version: true,
+      updatedAt: true,
+    },
+  });
+
+  const positionProjectTags = Array.isArray(position?.projectTags)
+    ? position.projectTags.filter(Boolean)
+    : [];
+
+  if (positionProjectTags.length === 0) {
+    return projects.slice(0, take);
+  }
+
+  const positionTagSet = new Set(positionProjectTags);
+
+  return projects
+    .filter((project) =>
+      (project.technologyTags || []).some((tag) => positionTagSet.has(tag)),
+    )
+    .slice(0, take);
+}
+
 async function getCurrentUserWithRoles(userId) {
   return prisma.user.findUnique({
     where: { id: userId },
@@ -205,10 +247,7 @@ router.get("/:id", async (req, res) => {
       cv.userId,
       cv.position.attributes,
     );
-    const projects = await getProjectsForCvOwner(
-      cv.userId,
-      cv.position.maxProjects,
-    );
+    const projects = await getFilteredProjectsForCvOwner(cv.userId, cv.position);
 
     const viewerRole = isOwner && isCandidate
       ? "CANDIDATE"
@@ -229,6 +268,7 @@ router.get("/:id", async (req, res) => {
         title: cv.position.title,
         shortDescription: cv.position.shortDescription,
         maxProjects: cv.position.maxProjects,
+        projectTags: cv.position.projectTags,
       },
       projects,
       attributes: cv.position.attributes.map((item) => {
