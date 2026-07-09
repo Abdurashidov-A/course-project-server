@@ -20,6 +20,14 @@ async function getCurrentUserWithRoles(userId) {
   });
 }
 
+function canManagePositions(user) {
+  return user?.roles?.some((userRole) => {
+    const roleName = userRole.role?.name;
+
+    return roleName === "RECRUITER" || roleName === "ADMIN";
+  });
+}
+
 function sanitizeProjectTags(tags) {
   if (tags === undefined) {
     return [];
@@ -30,6 +38,36 @@ function sanitizeProjectTags(tags) {
   }
 
   return [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
+}
+
+async function generateDuplicateTitle(tx, sourceTitle) {
+  const baseTitle = `${sourceTitle} Copy`;
+  const existingTitles = await tx.position.findMany({
+    where: {
+      title: {
+        startsWith: baseTitle,
+      },
+    },
+    select: {
+      title: true,
+    },
+  });
+
+  const usedTitles = new Set(existingTitles.map((position) => position.title));
+
+  if (!usedTitles.has(baseTitle)) {
+    return baseTitle;
+  }
+
+  for (let index = 2; index <= 50; index += 1) {
+    const candidateTitle = `${baseTitle} ${index}`;
+
+    if (!usedTitles.has(candidateTitle)) {
+      return candidateTitle;
+    }
+  }
+
+  return `${baseTitle} ${Date.now()}`;
 }
 
 router.get("/", async (req, res) => {
@@ -147,6 +185,100 @@ router.get("/:positionId/cvs", async (req, res) => {
     console.error("GET /api/positions/:positionId/cvs error:", error);
     res.status(500).json({
       message: "Failed to load published CVs for this position",
+    });
+  }
+});
+
+router.post("/:id/duplicate", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const id = Number(req.params.id);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({
+        message: "Valid position id is required",
+      });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!canManagePositions(currentUser)) {
+      return res.status(403).json({
+        message: "Only recruiters/admins can duplicate positions",
+      });
+    }
+
+    const duplicatedPosition = await prisma.$transaction(async (tx) => {
+      const sourcePosition = await tx.position.findUnique({
+        where: { id },
+        include: {
+          attributes: {
+            orderBy: {
+              sortOrder: "asc",
+            },
+            include: {
+              attribute: true,
+            },
+          },
+        },
+      });
+
+      if (!sourcePosition) {
+        return null;
+      }
+
+      const duplicatedTitle = await generateDuplicateTitle(tx, sourcePosition.title);
+
+      return tx.position.create({
+        data: {
+          title: duplicatedTitle,
+          shortDescription: sourcePosition.shortDescription,
+          isPublic: sourcePosition.isPublic,
+          maxProjects: sourcePosition.maxProjects,
+          projectTags: sourcePosition.projectTags || [],
+          attributes: {
+            create: sourcePosition.attributes.map((item) => ({
+              attributeId: item.attributeId,
+              isRequired: item.isRequired,
+              sortOrder: item.sortOrder,
+            })),
+          },
+        },
+        include: {
+          attributes: {
+            orderBy: { sortOrder: "asc" },
+            include: {
+              attribute: true,
+            },
+          },
+        },
+      });
+    });
+
+    if (!duplicatedPosition) {
+      return res.status(404).json({
+        message: "Position not found",
+      });
+    }
+
+    res.status(201).json(duplicatedPosition);
+  } catch (error) {
+    console.error("POST /api/positions/:id/duplicate error:", error);
+
+    res.status(500).json({
+      message: "Failed to duplicate position",
     });
   }
 });
