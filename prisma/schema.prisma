@@ -33,6 +33,7 @@ model User {
 
   roles                  UserRole[]
   cvs                    Cv[]
+  cvLikes                CvLike[]
   projects               Project[]
   profileAttributeValues ProfileAttributeValue[]
 
@@ -133,8 +134,23 @@ model Cv {
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  likes    CvLike[]
 
   @@unique([userId, positionId])
+}
+
+model CvLike {
+  id        Int      @id @default(autoincrement())
+  cvId      Int
+  userId    String
+  createdAt DateTime @default(now())
+
+  cv   Cv   @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([cvId, userId])
+  @@index([cvId])
+  @@index([userId])
 }
 
 model PositionAttribute {

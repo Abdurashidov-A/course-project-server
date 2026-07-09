@@ -136,6 +136,11 @@ async function searchCandidate(userId, query) {
         id: true,
         status: true,
         updatedAt: true,
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
         position: {
           select: {
             title: true,
@@ -242,6 +247,7 @@ async function searchCandidate(userId, query) {
       status: cv.status,
       positionTitle: cv.position?.title || "—",
       updatedAt: cv.updatedAt,
+      likesCount: cv._count.likes,
       type: "cv",
     })),
     projects,
@@ -257,7 +263,7 @@ async function searchCandidate(userId, query) {
   };
 }
 
-async function searchRecruiter(query) {
+async function searchRecruiter(userId, query) {
   const [
     positionsFromDatabase,
     attributes,
@@ -344,6 +350,19 @@ async function searchRecruiter(query) {
         id: true,
         status: true,
         updatedAt: true,
+        likes: {
+          where: {
+            userId,
+          },
+          select: {
+            id: true,
+          },
+        },
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
         position: {
           select: {
             title: true,
@@ -428,6 +447,8 @@ async function searchRecruiter(query) {
       candidateName: cv.user?.name || "—",
       candidateEmail: cv.user?.email || "—",
       updatedAt: cv.updatedAt,
+      likesCount: cv._count.likes,
+      likedByCurrentUser: cv.likes.length > 0,
       type: "publishedCv",
     })),
     candidates: candidates.map((candidate) => ({
@@ -478,7 +499,7 @@ router.get("/", async (req, res) => {
     const results =
       viewerRole === "CANDIDATE"
         ? await searchCandidate(currentUser.id, normalizedQuery)
-        : await searchRecruiter(normalizedQuery);
+        : await searchRecruiter(currentUser.id, normalizedQuery);
 
     const totalCount = Object.values(results).reduce(
       (sum, items) => sum + items.length,

@@ -164,6 +164,47 @@ async function getCurrentUserWithRoles(userId) {
   });
 }
 
+function getRoleNames(user) {
+  return user.roles.map((userRole) => userRole.role.name);
+}
+
+function canLikeCv(user) {
+  const roleNames = getRoleNames(user);
+
+  return roleNames.includes("RECRUITER") || roleNames.includes("ADMIN");
+}
+
+async function getCvLikesMeta(cvId, currentUserId, includeLikedByCurrentUser = false) {
+  const queries = [
+    prisma.cvLike.count({
+      where: {
+        cvId,
+      },
+    }),
+  ];
+
+  if (includeLikedByCurrentUser && currentUserId) {
+    queries.push(
+      prisma.cvLike.findFirst({
+        where: {
+          cvId,
+          userId: currentUserId,
+        },
+        select: {
+          id: true,
+        },
+      }),
+    );
+  }
+
+  const [likesCount, currentLike] = await prisma.$transaction(queries);
+
+  return {
+    likesCount,
+    likedByCurrentUser: includeLikedByCurrentUser ? Boolean(currentLike) : false,
+  };
+}
+
 router.get("/my", async (req, res) => {
   try {
     const userId = getDevUserId(req);
@@ -183,10 +224,20 @@ router.get("/my", async (req, res) => {
       },
       include: {
         position: true,
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
       },
     });
 
-    res.json(cvs);
+    res.json(
+      cvs.map(({ _count, ...cv }) => ({
+        ...cv,
+        likesCount: _count.likes,
+      })),
+    );
   } catch (error) {
     console.error("GET /api/cvs/my error:", error);
     res.status(500).json({
@@ -215,8 +266,8 @@ router.get("/:id", async (req, res) => {
     const currentUser = await getCurrentUserWithRoles(userId);
 
     if (!currentUser) {
-      return res.status(401).json({
-        message: "Current user not found",
+      return res.status(404).json({
+        message: "User not found",
       });
     }
 
@@ -228,7 +279,7 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const roleNames = currentUser.roles.map((userRole) => userRole.role.name);
+    const roleNames = getRoleNames(currentUser);
     const isAdmin = roleNames.includes("ADMIN");
     const isRecruiter = roleNames.includes("RECRUITER");
     const isCandidate = roleNames.includes("CANDIDATE");
@@ -248,6 +299,11 @@ router.get("/:id", async (req, res) => {
       cv.position.attributes,
     );
     const projects = await getFilteredProjectsForCvOwner(cv.userId, cv.position);
+    const likesMeta = await getCvLikesMeta(
+      cv.id,
+      userId,
+      canLikeCv(currentUser) && cv.status === "PUBLISHED",
+    );
 
     const viewerRole = isOwner && isCandidate
       ? "CANDIDATE"
@@ -263,6 +319,8 @@ router.get("/:id", async (req, res) => {
       updatedAt: cv.updatedAt,
       viewerRole,
       canEditValues: viewerRole === "CANDIDATE",
+      likesCount: likesMeta.likesCount,
+      likedByCurrentUser: likesMeta.likedByCurrentUser,
       position: {
         id: cv.position.id,
         title: cv.position.title,
@@ -318,6 +376,176 @@ router.get("/:id", async (req, res) => {
     console.error("GET /api/cvs/:id error:", error);
     res.status(500).json({
       message: "Failed to load CV preview data",
+    });
+  }
+});
+
+router.post("/:id/like", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const cvId = Number(req.params.id);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(cvId)) {
+      return res.status(404).json({
+        message: "CV not found",
+      });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!canLikeCv(currentUser)) {
+      return res.status(403).json({
+        message: "Only recruiters/admins can like CVs",
+      });
+    }
+
+    const cv = await prisma.cv.findUnique({
+      where: {
+        id: cvId,
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!cv) {
+      return res.status(404).json({
+        message: "CV not found",
+      });
+    }
+
+    if (cv.status !== "PUBLISHED") {
+      return res.status(403).json({
+        message: "Only published CVs can be liked",
+      });
+    }
+
+    const existingLike = await prisma.cvLike.findFirst({
+      where: {
+        cvId,
+        userId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!existingLike) {
+      await prisma.cvLike.create({
+        data: {
+          cvId,
+          userId,
+        },
+      });
+    }
+
+    const likesCount = await prisma.cvLike.count({
+      where: {
+        cvId,
+      },
+    });
+
+    res.json({
+      cvId,
+      liked: true,
+      likesCount,
+    });
+  } catch (error) {
+    console.error("POST /api/cvs/:id/like error:", error);
+    res.status(500).json({
+      message: "Failed to like CV",
+    });
+  }
+});
+
+router.delete("/:id/like", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const cvId = Number(req.params.id);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(cvId)) {
+      return res.status(404).json({
+        message: "CV not found",
+      });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!canLikeCv(currentUser)) {
+      return res.status(403).json({
+        message: "Only recruiters/admins can unlike CVs",
+      });
+    }
+
+    const cv = await prisma.cv.findUnique({
+      where: {
+        id: cvId,
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!cv) {
+      return res.status(404).json({
+        message: "CV not found",
+      });
+    }
+
+    if (cv.status !== "PUBLISHED") {
+      return res.status(403).json({
+        message: "Only published CVs can be unliked",
+      });
+    }
+
+    await prisma.cvLike.deleteMany({
+      where: {
+        cvId,
+        userId,
+      },
+    });
+
+    const likesCount = await prisma.cvLike.count({
+      where: {
+        cvId,
+      },
+    });
+
+    res.json({
+      cvId,
+      liked: false,
+      likesCount,
+    });
+  } catch (error) {
+    console.error("DELETE /api/cvs/:id/like error:", error);
+    res.status(500).json({
+      message: "Failed to unlike CV",
     });
   }
 });

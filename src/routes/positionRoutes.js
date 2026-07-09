@@ -167,6 +167,19 @@ router.get("/:positionId/cvs", async (req, res) => {
             email: true,
           },
         },
+        likes: {
+          where: {
+            userId,
+          },
+          select: {
+            id: true,
+          },
+        },
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
       },
     });
 
@@ -178,6 +191,8 @@ router.get("/:positionId/cvs", async (req, res) => {
         version: cv.version,
         createdAt: cv.createdAt,
         updatedAt: cv.updatedAt,
+        likesCount: cv._count.likes,
+        likedByCurrentUser: Array.isArray(cv.likes) ? cv.likes.length > 0 : false,
         candidate: cv.user,
       })),
     });
