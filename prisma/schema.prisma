@@ -34,6 +34,7 @@ model User {
   roles                  UserRole[]
   cvs                    Cv[]
   cvLikes                CvLike[]
+  discussionPosts        PositionDiscussionPost[]
   projects               Project[]
   profileAttributeValues ProfileAttributeValue[]
 
@@ -119,8 +120,9 @@ model Position {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  attributes PositionAttribute[]
-  cvs        Cv[]
+  attributes      PositionAttribute[]
+  cvs             Cv[]
+  discussionPosts PositionDiscussionPost[]
 }
 
 model Cv {
@@ -207,4 +209,18 @@ model Project {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model PositionDiscussionPost {
+  id         Int      @id @default(autoincrement())
+  positionId Int
+  authorId   String
+  content    String
+  createdAt  DateTime @default(now())
+
+  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  author   User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([positionId, createdAt])
+  @@index([authorId])
 }

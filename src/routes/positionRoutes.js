@@ -28,6 +28,20 @@ function canManagePositions(user) {
   });
 }
 
+function canAccessPositionDiscussions(user, position) {
+  const roleNames = user?.roles?.map((userRole) => userRole.role?.name) || [];
+
+  if (roleNames.includes("RECRUITER") || roleNames.includes("ADMIN")) {
+    return true;
+  }
+
+  if (roleNames.includes("CANDIDATE")) {
+    return Boolean(position?.isPublic);
+  }
+
+  return false;
+}
+
 function sanitizeProjectTags(tags) {
   if (tags === undefined) {
     return [];
@@ -200,6 +214,186 @@ router.get("/:positionId/cvs", async (req, res) => {
     console.error("GET /api/positions/:positionId/cvs error:", error);
     res.status(500).json({
       message: "Failed to load published CVs for this position",
+    });
+  }
+});
+
+router.get("/:positionId/discussions", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const positionId = Number(req.params.positionId);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(positionId) || positionId <= 0) {
+      return res.status(400).json({
+        message: "Valid position id is required",
+      });
+    }
+
+    const [currentUser, position] = await Promise.all([
+      getCurrentUserWithRoles(userId),
+      prisma.position.findUnique({
+        where: {
+          id: positionId,
+        },
+        select: {
+          id: true,
+          title: true,
+          isPublic: true,
+        },
+      }),
+    ]);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!position) {
+      return res.status(404).json({
+        message: "Position not found",
+      });
+    }
+
+    if (!canAccessPositionDiscussions(currentUser, position)) {
+      return res.status(403).json({
+        message: "You do not have access to discussions for this position",
+      });
+    }
+
+    const posts = await prisma.positionDiscussionPost.findMany({
+      where: {
+        positionId,
+      },
+      orderBy: [
+        {
+          createdAt: "asc",
+        },
+        {
+          id: "asc",
+        },
+      ],
+      take: 100,
+      select: {
+        id: true,
+        content: true,
+        createdAt: true,
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.json({
+      positionId,
+      posts,
+    });
+  } catch (error) {
+    console.error("GET /api/positions/:positionId/discussions error:", error);
+    res.status(500).json({
+      message: "Failed to load discussions",
+    });
+  }
+});
+
+router.post("/:positionId/discussions", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const positionId = Number(req.params.positionId);
+    const trimmedContent =
+      typeof req.body?.content === "string" ? req.body.content.trim() : "";
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    if (!Number.isInteger(positionId) || positionId <= 0) {
+      return res.status(400).json({
+        message: "Valid position id is required",
+      });
+    }
+
+    if (!trimmedContent) {
+      return res.status(400).json({
+        message: "Discussion content is required",
+      });
+    }
+
+    if (trimmedContent.length > 1000) {
+      return res.status(400).json({
+        message: "Discussion content must be 1000 characters or fewer",
+      });
+    }
+
+    const [currentUser, position] = await Promise.all([
+      getCurrentUserWithRoles(userId),
+      prisma.position.findUnique({
+        where: {
+          id: positionId,
+        },
+        select: {
+          id: true,
+          title: true,
+          isPublic: true,
+        },
+      }),
+    ]);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!position) {
+      return res.status(404).json({
+        message: "Position not found",
+      });
+    }
+
+    if (!canAccessPositionDiscussions(currentUser, position)) {
+      return res.status(403).json({
+        message: "You do not have access to discussions for this position",
+      });
+    }
+
+    const post = await prisma.positionDiscussionPost.create({
+      data: {
+        positionId,
+        authorId: userId,
+        content: trimmedContent,
+      },
+      select: {
+        id: true,
+        content: true,
+        createdAt: true,
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    res.status(201).json(post);
+  } catch (error) {
+    console.error("POST /api/positions/:positionId/discussions error:", error);
+    res.status(500).json({
+      message: "Failed to create discussion post",
     });
   }
 });
