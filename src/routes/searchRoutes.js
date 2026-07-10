@@ -1,8 +1,64 @@
 const express = require("express");
+const { Prisma } = require("@prisma/client");
 const prisma = require("../lib/prisma");
 const { buildCandidatePositionAccessMap } = require("../utils/positionAccess");
+const {
+  normalizeSearchQuery,
+  runFullTextQuery,
+} = require("../utils/fullTextSearch");
 
 const router = express.Router();
+
+const POSITION_VECTOR = Prisma.raw(`
+  to_tsvector(
+    'simple'::regconfig,
+    coalesce(p."title", '') || ' ' ||
+    coalesce(p."shortDescription", '') || ' ' ||
+    coalesce(array_to_string(p."projectTags", ' '), '')
+  )
+`);
+
+const PROJECT_VECTOR = Prisma.raw(`
+  to_tsvector(
+    'simple'::regconfig,
+    coalesce(pr."name", '') || ' ' ||
+    coalesce(pr."description", '') || ' ' ||
+    coalesce(array_to_string(pr."technologyTags", ' '), '')
+  )
+`);
+
+const PROFILE_VALUE_VECTOR = Prisma.raw(`
+  to_tsvector(
+    'simple'::regconfig,
+    coalesce(pv."stringValue", '') || ' ' ||
+    coalesce(pv."textValue", '') || ' ' ||
+    coalesce(pv."numericValue"::text, '') || ' ' ||
+    coalesce(pv."booleanValue"::text, '') || ' ' ||
+    coalesce(pv."dateValue"::text, '') || ' ' ||
+    coalesce(pv."periodStart"::text, '') || ' ' ||
+    coalesce(pv."periodEnd"::text, '') || ' ' ||
+    coalesce(pv."imageUrl", '')
+  )
+`);
+
+const ATTRIBUTE_VECTOR = Prisma.raw(`
+  to_tsvector(
+    'simple'::regconfig,
+    coalesce(a."name", '') || ' ' ||
+    coalesce(a."category"::text, '') || ' ' ||
+    coalesce(a."type"::text, '') || ' ' ||
+    coalesce(a."description", '') || ' ' ||
+    coalesce(string_agg(ao."value", ' '), '')
+  )
+`);
+
+const USER_VECTOR = Prisma.raw(`
+  to_tsvector(
+    'simple'::regconfig,
+    coalesce(u."name", '') || ' ' ||
+    coalesce(u."email", '')
+  )
+`);
 
 function getDevUserId(req) {
   return req.header("x-dev-user-id") || null;
@@ -66,381 +122,55 @@ function buildEmptyResponse(query, role) {
   };
 }
 
-function includesQuery(value, query) {
-  if (typeof value !== "string") {
-    return false;
+function getStringValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return "—";
   }
 
-  return value.toLowerCase().includes(query);
+  return String(value);
 }
 
-function matchesAnyTag(tags, query) {
-  if (!Array.isArray(tags)) {
-    return false;
+async function searchCandidatePositions(userId, query) {
+  const matchedPositions = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      p.id,
+      p.title,
+      p."shortDescription",
+      p."isPublic",
+      p."updatedAt",
+      ts_rank_cd(${POSITION_VECTOR}, ${tsQuery}) AS rank
+    FROM "Position" p
+    WHERE ${POSITION_VECTOR} @@ ${tsQuery}
+    ORDER BY rank DESC, p."updatedAt" DESC
+    LIMIT 25
+  `, query);
+
+  if (matchedPositions.length === 0) {
+    return [];
   }
 
-  return tags.some((tag) => includesQuery(tag, query));
-}
-
-async function searchCandidate(userId, query) {
-  const statusQuery =
-    query === "draft" || query === "published" ? query.toUpperCase() : null;
-  const [
-    positionsFromDatabase,
-    cvs,
-    projectsFromDatabase,
-    profileValues,
-  ] = await Promise.all([
-    prisma.position.findMany({
-      where: {},
-      orderBy: {
-        updatedAt: "desc",
+  const positionsForAccess = await prisma.position.findMany({
+    where: {
+      id: {
+        in: matchedPositions.map((position) => position.id),
       },
-      take: 50,
-      include: {
-        accessRules: {
-          orderBy: {
-            sortOrder: "asc",
-          },
-          include: {
-            attribute: true,
-          },
+    },
+    include: {
+      accessRules: {
+        orderBy: {
+          sortOrder: "asc",
+        },
+        include: {
+          attribute: true,
         },
       },
-    }),
-    prisma.cv.findMany({
-      where: {
-        userId,
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 50,
-      select: {
-        id: true,
-        status: true,
-        positionId: true,
-        updatedAt: true,
-        position: {
-          include: {
-            accessRules: {
-              orderBy: {
-                sortOrder: "asc",
-              },
-              include: {
-                attribute: true,
-              },
-            },
-          },
-        },
-        _count: {
-          select: {
-            likes: true,
-          },
-        },
-      },
-    }),
-    prisma.project.findMany({
-      where: {
-        userId,
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 50,
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        technologyTags: true,
-        updatedAt: true,
-      },
-    }),
-    prisma.profileAttributeValue.findMany({
-      where: {
-        userId,
-        OR: [
-          {
-            stringValue: {
-              contains: query,
-              mode: "insensitive",
-            },
-          },
-          {
-            textValue: {
-              contains: query,
-              mode: "insensitive",
-            },
-          },
-          {
-            attribute: {
-              name: {
-                contains: query,
-                mode: "insensitive",
-              },
-            },
-          },
-        ],
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 5,
-      select: {
-        id: true,
-        stringValue: true,
-        textValue: true,
-        updatedAt: true,
-        attribute: {
-          select: {
-            id: true,
-            name: true,
-            type: true,
-          },
-        },
-      },
-    }),
-  ]);
-
-  const positionAccessMap = await buildCandidatePositionAccessMap(
-    userId,
-    positionsFromDatabase,
-  );
-  const accessiblePositions = positionsFromDatabase.filter(
-    (position) => positionAccessMap.get(position.id)?.accessible,
-  );
-  const cvPositionAccessMap = await buildCandidatePositionAccessMap(
-    userId,
-    cvs.map((cv) => cv.position).filter(Boolean),
-  );
-
-  const positions = accessiblePositions
-    .filter(
-      (position) =>
-        includesQuery(position.title, query) ||
-        includesQuery(position.shortDescription, query) ||
-        matchesAnyTag(position.projectTags, query),
-    )
-    .slice(0, 10)
-    .map(({ projectTags, updatedAt, accessRules, ...position }) => ({
-      ...position,
-      type: "position",
-    }));
-
-  const accessibleCvs = cvs.filter((cv) =>
-    cvPositionAccessMap.get(cv.positionId)?.accessible,
-  );
-
-  const filteredCvs = accessibleCvs.filter((cv) => {
-    if (statusQuery && cv.status === statusQuery) {
-      return true;
-    }
-
-    return includesQuery(cv.position?.title, query);
+    },
   });
 
-  const projects = projectsFromDatabase
-    .filter(
-      (project) =>
-        includesQuery(project.name, query) ||
-        includesQuery(project.description, query) ||
-        matchesAnyTag(project.technologyTags, query),
-    )
-    .slice(0, 10)
-    .map((project) => ({
-      id: project.id,
-      name: project.name,
-      description: project.description,
-      technologyTags: project.technologyTags,
-      updatedAt: project.updatedAt,
-      type: "project",
-    }));
+  const accessMap = await buildCandidatePositionAccessMap(userId, positionsForAccess);
 
-  return {
-    positions,
-    cvs: filteredCvs.slice(0, 5).map((cv) => ({
-      id: cv.id,
-      status: cv.status,
-      positionTitle: cv.position?.title || "—",
-      updatedAt: cv.updatedAt,
-      likesCount: cv._count.likes,
-      type: "cv",
-    })),
-    projects,
-    profileValues: profileValues.map((value) => ({
-      id: value.id,
-      attributeId: value.attribute.id,
-      attributeName: value.attribute.name,
-      attributeType: value.attribute.type,
-      value: value.stringValue || value.textValue || "—",
-      updatedAt: value.updatedAt,
-      type: "profileValue",
-    })),
-  };
-}
-
-async function searchRecruiter(userId, query) {
-  const [
-    positionsFromDatabase,
-    attributes,
-    publishedCvs,
-    candidates,
-  ] = await Promise.all([
-    prisma.position.findMany({
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 100,
-      select: {
-        id: true,
-        title: true,
-        shortDescription: true,
-        isPublic: true,
-        projectTags: true,
-      },
-    }),
-    prisma.attribute.findMany({
-      where: {
-        OR: [
-          {
-            name: {
-              contains: query,
-              mode: "insensitive",
-            },
-          },
-          {
-            description: {
-              contains: query,
-              mode: "insensitive",
-            },
-          },
-        ],
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 10,
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        type: true,
-        description: true,
-      },
-    }),
-    prisma.cv.findMany({
-      where: {
-        status: "PUBLISHED",
-        OR: [
-          {
-            position: {
-              title: {
-                contains: query,
-                mode: "insensitive",
-              },
-            },
-          },
-          {
-            user: {
-              name: {
-                contains: query,
-                mode: "insensitive",
-              },
-            },
-          },
-          {
-            user: {
-              email: {
-                contains: query,
-                mode: "insensitive",
-              },
-            },
-          },
-        ],
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 10,
-      select: {
-        id: true,
-        status: true,
-        updatedAt: true,
-        likes: {
-          where: {
-            userId,
-          },
-          select: {
-            id: true,
-          },
-        },
-        _count: {
-          select: {
-            likes: true,
-          },
-        },
-        position: {
-          select: {
-            title: true,
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-      },
-    }),
-    prisma.user.findMany({
-      where: {
-        roles: {
-          some: {
-            role: {
-              name: "CANDIDATE",
-            },
-          },
-        },
-        cvs: {
-          some: {
-            status: "PUBLISHED",
-          },
-        },
-        OR: [
-          {
-            name: {
-              contains: query,
-              mode: "insensitive",
-            },
-          },
-          {
-            email: {
-              contains: query,
-              mode: "insensitive",
-            },
-          },
-        ],
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 10,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-      },
-    }),
-  ]);
-
-  const positions = positionsFromDatabase
-    .filter(
-      (position) =>
-        includesQuery(position.title, query) ||
-        includesQuery(position.shortDescription, query) ||
-        matchesAnyTag(position.projectTags, query),
-    )
+  return matchedPositions
+    .filter((position) => accessMap.get(position.id)?.accessible)
     .slice(0, 10)
     .map((position) => ({
       id: position.id,
@@ -449,28 +179,330 @@ async function searchRecruiter(userId, query) {
       isPublic: position.isPublic,
       type: "position",
     }));
+}
+
+async function searchCandidateCvs(userId, query) {
+  const matchedCvs = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      cv.id,
+      cv.status,
+      cv."positionId",
+      cv."updatedAt",
+      p.title AS "positionTitle",
+      COALESCE(COUNT(cl.id), 0)::int AS "likesCount",
+      ts_rank_cd(
+        to_tsvector(
+          'simple'::regconfig,
+          coalesce(p.title, '') || ' ' ||
+          coalesce(p."shortDescription", '') || ' ' ||
+          coalesce(cv.status::text, '') || ' ' ||
+          coalesce(array_to_string(p."projectTags", ' '), '')
+        ),
+        ${tsQuery}
+      ) AS rank
+    FROM "Cv" cv
+    JOIN "Position" p ON p.id = cv."positionId"
+    LEFT JOIN "CvLike" cl ON cl."cvId" = cv.id
+    WHERE cv."userId" = ${userId}
+      AND to_tsvector(
+        'simple'::regconfig,
+        coalesce(p.title, '') || ' ' ||
+        coalesce(p."shortDescription", '') || ' ' ||
+        coalesce(cv.status::text, '') || ' ' ||
+        coalesce(array_to_string(p."projectTags", ' '), '')
+      ) @@ ${tsQuery}
+    GROUP BY cv.id, p.id
+    ORDER BY rank DESC, cv."updatedAt" DESC
+    LIMIT 25
+  `, query);
+
+  if (matchedCvs.length === 0) {
+    return [];
+  }
+
+  const positionsForAccess = await prisma.position.findMany({
+    where: {
+      id: {
+        in: matchedCvs.map((cv) => cv.positionId),
+      },
+    },
+    include: {
+      accessRules: {
+        orderBy: {
+          sortOrder: "asc",
+        },
+        include: {
+          attribute: true,
+        },
+      },
+    },
+  });
+
+  const accessMap = await buildCandidatePositionAccessMap(userId, positionsForAccess);
+
+  return matchedCvs
+    .filter((cv) => accessMap.get(cv.positionId)?.accessible)
+    .slice(0, 5)
+    .map((cv) => ({
+      id: cv.id,
+      status: cv.status,
+      positionTitle: cv.positionTitle || "—",
+      updatedAt: cv.updatedAt,
+      likesCount: cv.likesCount,
+      type: "cv",
+    }));
+}
+
+async function searchCandidateProjects(userId, query) {
+  const projects = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      pr.id,
+      pr.name,
+      pr.description,
+      pr."technologyTags",
+      pr."updatedAt",
+      ts_rank_cd(${PROJECT_VECTOR}, ${tsQuery}) AS rank
+    FROM "Project" pr
+    WHERE pr."userId" = ${userId}
+      AND ${PROJECT_VECTOR} @@ ${tsQuery}
+    ORDER BY rank DESC, pr."updatedAt" DESC
+    LIMIT 10
+  `, query);
+
+  return projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    description: project.description,
+    technologyTags: project.technologyTags,
+    updatedAt: project.updatedAt,
+    type: "project",
+  }));
+}
+
+async function searchCandidateProfileValues(userId, query) {
+  const profileValues = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      pv.id,
+      pv."updatedAt",
+      a.id AS "attributeId",
+      a.name AS "attributeName",
+      a.type AS "attributeType",
+      COALESCE(
+        NULLIF(pv."stringValue", ''),
+        NULLIF(pv."textValue", ''),
+        pv."numericValue"::text,
+        pv."booleanValue"::text,
+        pv."dateValue"::text,
+        pv."periodStart"::text,
+        pv."imageUrl",
+        '—'
+      ) AS value,
+      GREATEST(
+        ts_rank_cd(${PROFILE_VALUE_VECTOR}, ${tsQuery}),
+        ts_rank_cd(
+          to_tsvector(
+            'simple'::regconfig,
+            coalesce(a.name, '') || ' ' ||
+            coalesce(a.category::text, '') || ' ' ||
+            coalesce(a.type::text, '')
+          ),
+          ${tsQuery}
+        )
+      ) AS rank
+    FROM "ProfileAttributeValue" pv
+    JOIN "Attribute" a ON a.id = pv."attributeId"
+    WHERE pv."userId" = ${userId}
+      AND (
+        ${PROFILE_VALUE_VECTOR} @@ ${tsQuery}
+        OR to_tsvector(
+          'simple'::regconfig,
+          coalesce(a.name, '') || ' ' ||
+          coalesce(a.category::text, '') || ' ' ||
+          coalesce(a.type::text, '')
+        ) @@ ${tsQuery}
+      )
+    ORDER BY rank DESC, pv."updatedAt" DESC
+    LIMIT 10
+  `, query);
+
+  return profileValues.map((value) => ({
+    id: value.id,
+    attributeId: value.attributeId,
+    attributeName: value.attributeName,
+    attributeType: value.attributeType,
+    value: value.value || "—",
+    updatedAt: value.updatedAt,
+    type: "profileValue",
+  }));
+}
+
+async function searchCandidate(userId, query) {
+  const [positions, cvs, projects, profileValues] = await Promise.all([
+    searchCandidatePositions(userId, query),
+    searchCandidateCvs(userId, query),
+    searchCandidateProjects(userId, query),
+    searchCandidateProfileValues(userId, query),
+  ]);
 
   return {
     positions,
-    attributes: attributes.map((attribute) => ({
-      ...attribute,
-      type: "attribute",
-    })),
-    publishedCvs: publishedCvs.map((cv) => ({
-      id: cv.id,
-      status: cv.status,
-      positionTitle: cv.position?.title || "—",
-      candidateName: cv.user?.name || "—",
-      candidateEmail: cv.user?.email || "—",
-      updatedAt: cv.updatedAt,
-      likesCount: cv._count.likes,
-      likedByCurrentUser: cv.likes.length > 0,
-      type: "publishedCv",
-    })),
-    candidates: candidates.map((candidate) => ({
-      ...candidate,
-      type: "candidate",
-    })),
+    cvs,
+    projects,
+    profileValues,
+  };
+}
+
+async function searchRecruiterPositions(query) {
+  const positions = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      p.id,
+      p.title,
+      p."shortDescription",
+      p."isPublic",
+      ts_rank_cd(${POSITION_VECTOR}, ${tsQuery}) AS rank
+    FROM "Position" p
+    WHERE ${POSITION_VECTOR} @@ ${tsQuery}
+    ORDER BY rank DESC, p."updatedAt" DESC
+    LIMIT 10
+  `, query);
+
+  return positions.map((position) => ({
+    id: position.id,
+    title: position.title,
+    shortDescription: position.shortDescription,
+    isPublic: position.isPublic,
+    type: "position",
+  }));
+}
+
+async function searchRecruiterAttributes(query) {
+  const attributes = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      a.id,
+      a.name,
+      a.category,
+      a.type,
+      a.description,
+      ts_rank_cd(${ATTRIBUTE_VECTOR}, ${tsQuery}) AS rank
+    FROM "Attribute" a
+    LEFT JOIN "AttributeOption" ao ON ao."attributeId" = a.id
+    GROUP BY a.id
+    HAVING ${ATTRIBUTE_VECTOR} @@ ${tsQuery}
+    ORDER BY rank DESC, a."updatedAt" DESC
+    LIMIT 10
+  `, query);
+
+  return attributes.map((attribute) => ({
+    id: attribute.id,
+    name: attribute.name,
+    category: attribute.category,
+    type: attribute.type,
+    description: attribute.description,
+    resultType: "attribute",
+  }));
+}
+
+async function searchRecruiterPublishedCvs(userId, query) {
+  const publishedCvs = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      cv.id,
+      cv.status,
+      cv."updatedAt",
+      p.title AS "positionTitle",
+      u.name AS "candidateName",
+      u.email AS "candidateEmail",
+      COALESCE(COUNT(cl.id), 0)::int AS "likesCount",
+      BOOL_OR(my_like.id IS NOT NULL) AS "likedByCurrentUser",
+      ts_rank_cd(
+        to_tsvector(
+          'simple'::regconfig,
+          coalesce(u.name, '') || ' ' ||
+          coalesce(u.email, '') || ' ' ||
+          coalesce(p.title, '') || ' ' ||
+          coalesce(p."shortDescription", '') || ' ' ||
+          coalesce(cv.status::text, '')
+        ),
+        ${tsQuery}
+      ) AS rank
+    FROM "Cv" cv
+    JOIN "User" u ON u.id = cv."userId"
+    JOIN "Position" p ON p.id = cv."positionId"
+    LEFT JOIN "CvLike" cl ON cl."cvId" = cv.id
+    LEFT JOIN "CvLike" my_like ON my_like."cvId" = cv.id AND my_like."userId" = ${userId}
+    WHERE cv.status = 'PUBLISHED'
+      AND to_tsvector(
+        'simple'::regconfig,
+        coalesce(u.name, '') || ' ' ||
+        coalesce(u.email, '') || ' ' ||
+        coalesce(p.title, '') || ' ' ||
+        coalesce(p."shortDescription", '') || ' ' ||
+        coalesce(cv.status::text, '')
+      ) @@ ${tsQuery}
+    GROUP BY cv.id, p.id, u.id
+    ORDER BY rank DESC, cv."updatedAt" DESC
+    LIMIT 10
+  `, query);
+
+  return publishedCvs.map((cv) => ({
+    id: cv.id,
+    status: cv.status,
+    positionTitle: cv.positionTitle || "—",
+    candidateName: cv.candidateName || "—",
+    candidateEmail: cv.candidateEmail || "—",
+    updatedAt: cv.updatedAt,
+    likesCount: cv.likesCount,
+    likedByCurrentUser: Boolean(cv.likedByCurrentUser),
+    type: "publishedCv",
+  }));
+}
+
+async function searchRecruiterCandidates(query) {
+  const candidates = await runFullTextQuery(prisma, (tsQuery) => Prisma.sql`
+    SELECT
+      u.id,
+      u.name,
+      u.email,
+      ts_rank_cd(${USER_VECTOR}, ${tsQuery}) AS rank
+    FROM "User" u
+    WHERE EXISTS (
+      SELECT 1
+      FROM "UserRole" ur
+      JOIN "Role" r ON r.id = ur."roleId"
+      WHERE ur."userId" = u.id
+        AND r.name = 'CANDIDATE'
+    )
+      AND EXISTS (
+        SELECT 1
+        FROM "Cv" cv
+        WHERE cv."userId" = u.id
+          AND cv.status = 'PUBLISHED'
+      )
+      AND ${USER_VECTOR} @@ ${tsQuery}
+    ORDER BY rank DESC, u."updatedAt" DESC
+    LIMIT 10
+  `, query);
+
+  return candidates.map((candidate) => ({
+    id: candidate.id,
+    name: candidate.name,
+    email: candidate.email,
+    type: "candidate",
+  }));
+}
+
+async function searchRecruiter(userId, query) {
+  const [positions, attributes, publishedCvs, candidates] = await Promise.all([
+    searchRecruiterPositions(query),
+    searchRecruiterAttributes(query),
+    searchRecruiterPublishedCvs(userId, query),
+    searchRecruiterCandidates(query),
+  ]);
+
+  return {
+    positions,
+    attributes,
+    publishedCvs,
+    candidates,
   };
 }
 
@@ -490,7 +522,7 @@ router.get("/", async (req, res) => {
       });
     }
 
-    const trimmedQuery = req.query.q.trim().slice(0, 100);
+    const trimmedQuery = normalizeSearchQuery(req.query.q);
     const currentUser = await getCurrentUserWithRoles(userId);
 
     if (!currentUser) {
@@ -511,11 +543,10 @@ router.get("/", async (req, res) => {
       return res.json(buildEmptyResponse(trimmedQuery, viewerRole));
     }
 
-    const normalizedQuery = trimmedQuery.toLowerCase();
     const results =
       viewerRole === "CANDIDATE"
-        ? await searchCandidate(currentUser.id, normalizedQuery)
-        : await searchRecruiter(currentUser.id, normalizedQuery);
+        ? await searchCandidate(currentUser.id, trimmedQuery)
+        : await searchRecruiter(currentUser.id, trimmedQuery);
 
     const totalCount = Object.values(results).reduce(
       (sum, items) => sum + items.length,
