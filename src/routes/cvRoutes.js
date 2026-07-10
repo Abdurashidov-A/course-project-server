@@ -1,5 +1,9 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const {
+  buildCandidatePositionAccessMap,
+  canCandidateAccessPosition,
+} = require("../utils/positionAccess");
 
 const router = express.Router();
 
@@ -51,6 +55,14 @@ async function getCvWithPositionAttributes(cvId) {
     include: {
       position: {
         include: {
+          accessRules: {
+            orderBy: {
+              sortOrder: "asc",
+            },
+            include: {
+              attribute: true,
+            },
+          },
           attributes: {
             orderBy: {
               sortOrder: "asc",
@@ -174,6 +186,16 @@ function canLikeCv(user) {
   return roleNames.includes("RECRUITER") || roleNames.includes("ADMIN");
 }
 
+function isCandidateOnly(user) {
+  const roleNames = getRoleNames(user);
+
+  return (
+    roleNames.includes("CANDIDATE") &&
+    !roleNames.includes("RECRUITER") &&
+    !roleNames.includes("ADMIN")
+  );
+}
+
 async function getCvLikesMeta(cvId, currentUserId, includeLikedByCurrentUser = false) {
   const queries = [
     prisma.cvLike.count({
@@ -215,6 +237,14 @@ router.get("/my", async (req, res) => {
         .json({ message: "Dev user id header is required" });
     }
 
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
     const cvs = await prisma.cv.findMany({
       where: {
         userId,
@@ -223,7 +253,18 @@ router.get("/my", async (req, res) => {
         updatedAt: "desc",
       },
       include: {
-        position: true,
+        position: {
+          include: {
+            accessRules: {
+              orderBy: {
+                sortOrder: "asc",
+              },
+              include: {
+                attribute: true,
+              },
+            },
+          },
+        },
         _count: {
           select: {
             likes: true,
@@ -232,9 +273,28 @@ router.get("/my", async (req, res) => {
       },
     });
 
+    const accessibleCvs = isCandidateOnly(currentUser)
+      ? (() => {
+          const positions = cvs
+            .map((cv) => cv.position)
+            .filter(Boolean);
+
+          return buildCandidatePositionAccessMap(userId, positions).then(
+            (candidateAccessMap) =>
+              cvs.filter((cv) => candidateAccessMap.get(cv.positionId)?.accessible),
+          );
+        })()
+      : Promise.resolve(cvs);
+
     res.json(
-      cvs.map(({ _count, ...cv }) => ({
+      (await accessibleCvs).map(({ _count, position, ...cv }) => ({
         ...cv,
+        position: position
+          ? {
+              ...position,
+              accessRules: undefined,
+            }
+          : null,
         likesCount: _count.likes,
       })),
     );
@@ -284,6 +344,16 @@ router.get("/:id", async (req, res) => {
     const isRecruiter = roleNames.includes("RECRUITER");
     const isCandidate = roleNames.includes("CANDIDATE");
     const isOwner = cv.userId === userId;
+
+    if (isCandidate && isOwner) {
+      const accessResult = await canCandidateAccessPosition(userId, cv.position);
+
+      if (!accessResult.accessible) {
+        return res.status(403).json({
+          message: "This CV is hidden because you no longer have access to the position.",
+        });
+      }
+    }
 
     const canAccess =
       (isCandidate && isOwner) || isAdmin || (isRecruiter && cv.status === "PUBLISHED");
@@ -672,12 +742,40 @@ router.post("/", async (req, res) => {
       where: {
         id: positionId,
       },
+      include: {
+        accessRules: {
+          orderBy: {
+            sortOrder: "asc",
+          },
+          include: {
+            attribute: true,
+          },
+        },
+      },
     });
 
     if (!position) {
       return res.status(404).json({
         message: "Position not found",
       });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (isCandidateOnly(currentUser)) {
+      const accessResult = await canCandidateAccessPosition(userId, position);
+
+      if (!accessResult.accessible) {
+        return res.status(403).json({
+          message: "You do not have access to this position.",
+        });
+      }
     }
 
     const cv = await prisma.cv.create({

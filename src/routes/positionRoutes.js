@@ -1,5 +1,11 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const {
+  buildCandidatePositionAccessMap,
+  buildPositionAccessMeta,
+  canCandidateAccessPosition,
+  validateAndNormalizeAccessRules,
+} = require("../utils/positionAccess");
 
 const router = express.Router();
 
@@ -20,23 +26,25 @@ async function getCurrentUserWithRoles(userId) {
   });
 }
 
-function canManagePositions(user) {
-  return user?.roles?.some((userRole) => {
-    const roleName = userRole.role?.name;
-
-    return roleName === "RECRUITER" || roleName === "ADMIN";
-  });
+function getRoleNames(user) {
+  return user?.roles?.map((userRole) => userRole.role?.name) || [];
 }
 
-function canAccessPositionDiscussions(user, position) {
-  const roleNames = user?.roles?.map((userRole) => userRole.role?.name) || [];
+function canManagePositions(user) {
+  const roleNames = getRoleNames(user);
+
+  return roleNames.includes("RECRUITER") || roleNames.includes("ADMIN");
+}
+
+async function canAccessPositionDiscussions(user, position) {
+  const roleNames = getRoleNames(user);
 
   if (roleNames.includes("RECRUITER") || roleNames.includes("ADMIN")) {
     return true;
   }
 
   if (roleNames.includes("CANDIDATE")) {
-    return Boolean(position?.isPublic);
+    return (await canCandidateAccessPosition(user.id, position)).accessible;
   }
 
   return false;
@@ -84,21 +92,168 @@ async function generateDuplicateTitle(tx, sourceTitle) {
   return `${baseTitle} ${Date.now()}`;
 }
 
-router.get("/", async (req, res) => {
-  try {
-    const positions = await prisma.position.findMany({
-      orderBy: { updatedAt: "desc" },
+function serializeAccessRule(rule) {
+  return {
+    id: rule.id,
+    attributeId: rule.attributeId,
+    operator: rule.operator,
+    stringValue: rule.stringValue,
+    numericValue: rule.numericValue,
+    booleanValue: rule.booleanValue,
+    dateValue: rule.dateValue,
+    sortOrder: rule.sortOrder,
+    attribute: rule.attribute
+      ? {
+          id: rule.attribute.id,
+          name: rule.attribute.name,
+          type: rule.attribute.type,
+        }
+      : undefined,
+  };
+}
+
+function serializePosition(position, options = {}) {
+  const { includeAccessRules = false, isAccessible } = options;
+  const accessMeta = buildPositionAccessMeta(position);
+
+  return {
+    id: position.id,
+    title: position.title,
+    shortDescription: position.shortDescription,
+    isPublic: position.isPublic,
+    maxProjects: position.maxProjects,
+    projectTags: position.projectTags,
+    version: position.version,
+    createdAt: position.createdAt,
+    updatedAt: position.updatedAt,
+    attributes: position.attributes,
+    ...accessMeta,
+    ...(typeof isAccessible === "boolean" ? { isAccessible } : {}),
+    ...(includeAccessRules
+      ? {
+          accessRules: (position.accessRules || []).map(serializeAccessRule),
+        }
+      : {}),
+  };
+}
+
+function getPositionInclude() {
+  return {
+    accessRules: {
+      orderBy: { sortOrder: "asc" },
       include: {
-        attributes: {
-          orderBy: { sortOrder: "asc" },
+        attribute: {
           include: {
-            attribute: true,
+            options: {
+              orderBy: {
+                sortOrder: "asc",
+              },
+            },
           },
         },
       },
+    },
+    attributes: {
+      orderBy: { sortOrder: "asc" },
+      include: {
+        attribute: {
+          include: {
+            options: {
+              orderBy: {
+                sortOrder: "asc",
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+async function loadAttributesByIds(attributeIds) {
+  if (!Array.isArray(attributeIds) || attributeIds.length === 0) {
+    return new Map();
+  }
+
+  const attributes = await prisma.attribute.findMany({
+    where: {
+      id: {
+        in: attributeIds,
+      },
+    },
+    include: {
+      options: {
+        orderBy: {
+          sortOrder: "asc",
+        },
+      },
+    },
+  });
+
+  return new Map(attributes.map((attribute) => [attribute.id, attribute]));
+}
+
+async function getNormalizedAccessRulesOrError(accessRules) {
+  const attributeIds = accessRules
+    .map((rule) => Number(rule?.attributeId))
+    .filter((attributeId) => Number.isInteger(attributeId) && attributeId > 0);
+
+  const attributesById = await loadAttributesByIds(attributeIds);
+
+  return validateAndNormalizeAccessRules(accessRules, attributesById);
+}
+
+router.get("/", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    const positions = await prisma.position.findMany({
+      orderBy: { updatedAt: "desc" },
+      include: getPositionInclude(),
     });
 
-    res.json(positions);
+    const roleNames = getRoleNames(currentUser);
+    const isCandidateOnly =
+      roleNames.includes("CANDIDATE") &&
+      !roleNames.includes("RECRUITER") &&
+      !roleNames.includes("ADMIN");
+
+    if (isCandidateOnly) {
+      const accessMap = await buildCandidatePositionAccessMap(userId, positions);
+
+      return res.json(
+        positions
+          .filter((position) => accessMap.get(position.id)?.accessible)
+          .map((position) =>
+            serializePosition(position, {
+              isAccessible: true,
+            }),
+          ),
+      );
+    }
+
+    res.json(
+      positions.map((position) =>
+        serializePosition(position, {
+          includeAccessRules: true,
+          isAccessible: true,
+        }),
+      ),
+    );
   } catch (error) {
     console.error("GET /api/positions error:", error);
     res.status(500).json({
@@ -132,7 +287,7 @@ router.get("/:positionId/cvs", async (req, res) => {
       });
     }
 
-    const roleNames = currentUser.roles.map((userRole) => userRole.role.name);
+    const roleNames = getRoleNames(currentUser);
     const canAccess =
       roleNames.includes("RECRUITER") || roleNames.includes("ADMIN");
 
@@ -241,10 +396,15 @@ router.get("/:positionId/discussions", async (req, res) => {
         where: {
           id: positionId,
         },
-        select: {
-          id: true,
-          title: true,
-          isPublic: true,
+        include: {
+          accessRules: {
+            orderBy: {
+              sortOrder: "asc",
+            },
+            include: {
+              attribute: true,
+            },
+          },
         },
       }),
     ]);
@@ -261,7 +421,7 @@ router.get("/:positionId/discussions", async (req, res) => {
       });
     }
 
-    if (!canAccessPositionDiscussions(currentUser, position)) {
+    if (!(await canAccessPositionDiscussions(currentUser, position))) {
       return res.status(403).json({
         message: "You do not have access to discussions for this position",
       });
@@ -343,10 +503,15 @@ router.post("/:positionId/discussions", async (req, res) => {
         where: {
           id: positionId,
         },
-        select: {
-          id: true,
-          title: true,
-          isPublic: true,
+        include: {
+          accessRules: {
+            orderBy: {
+              sortOrder: "asc",
+            },
+            include: {
+              attribute: true,
+            },
+          },
         },
       }),
     ]);
@@ -363,7 +528,7 @@ router.post("/:positionId/discussions", async (req, res) => {
       });
     }
 
-    if (!canAccessPositionDiscussions(currentUser, position)) {
+    if (!(await canAccessPositionDiscussions(currentUser, position))) {
       return res.status(403).json({
         message: "You do not have access to discussions for this position",
       });
@@ -432,16 +597,7 @@ router.post("/:id/duplicate", async (req, res) => {
     const duplicatedPosition = await prisma.$transaction(async (tx) => {
       const sourcePosition = await tx.position.findUnique({
         where: { id },
-        include: {
-          attributes: {
-            orderBy: {
-              sortOrder: "asc",
-            },
-            include: {
-              attribute: true,
-            },
-          },
-        },
+        include: getPositionInclude(),
       });
 
       if (!sourcePosition) {
@@ -457,6 +613,17 @@ router.post("/:id/duplicate", async (req, res) => {
           isPublic: sourcePosition.isPublic,
           maxProjects: sourcePosition.maxProjects,
           projectTags: sourcePosition.projectTags || [],
+          accessRules: {
+            create: (sourcePosition.accessRules || []).map((rule) => ({
+              attributeId: rule.attributeId,
+              operator: rule.operator,
+              stringValue: rule.stringValue,
+              numericValue: rule.numericValue,
+              booleanValue: rule.booleanValue,
+              dateValue: rule.dateValue,
+              sortOrder: rule.sortOrder,
+            })),
+          },
           attributes: {
             create: sourcePosition.attributes.map((item) => ({
               attributeId: item.attributeId,
@@ -465,14 +632,7 @@ router.post("/:id/duplicate", async (req, res) => {
             })),
           },
         },
-        include: {
-          attributes: {
-            orderBy: { sortOrder: "asc" },
-            include: {
-              attribute: true,
-            },
-          },
-        },
+        include: getPositionInclude(),
       });
     });
 
@@ -482,7 +642,12 @@ router.post("/:id/duplicate", async (req, res) => {
       });
     }
 
-    res.status(201).json(duplicatedPosition);
+    res.status(201).json(
+      serializePosition(duplicatedPosition, {
+        includeAccessRules: true,
+        isAccessible: true,
+      }),
+    );
   } catch (error) {
     console.error("POST /api/positions/:id/duplicate error:", error);
 
@@ -494,6 +659,7 @@ router.post("/:id/duplicate", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
+    const userId = getDevUserId(req);
     const {
       title,
       shortDescription,
@@ -501,7 +667,28 @@ router.post("/", async (req, res) => {
       maxProjects = 3,
       projectTags = [],
       attributes = [],
+      accessRules = [],
     } = req.body;
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!canManagePositions(currentUser)) {
+      return res.status(403).json({
+        message: "Only recruiters/admins can create positions",
+      });
+    }
 
     if (!title) {
       return res.status(400).json({
@@ -517,6 +704,15 @@ router.post("/", async (req, res) => {
       });
     }
 
+    const { normalizedRules, error: accessRulesError } =
+      await getNormalizedAccessRulesOrError(accessRules);
+
+    if (accessRulesError) {
+      return res.status(400).json({
+        message: accessRulesError,
+      });
+    }
+
     const position = await prisma.position.create({
       data: {
         title,
@@ -524,25 +720,26 @@ router.post("/", async (req, res) => {
         isPublic,
         maxProjects: Number(maxProjects) || 3,
         projectTags: sanitizedProjectTags,
+        accessRules: {
+          create: normalizedRules,
+        },
         attributes: {
           create: attributes.map((item, index) => ({
             attributeId: item.attributeId,
             isRequired: Boolean(item.isRequired),
-            sortOrder: index + 1,
+            sortOrder: Number.isInteger(item.sortOrder) ? item.sortOrder : index + 1,
           })),
         },
       },
-      include: {
-        attributes: {
-          orderBy: { sortOrder: "asc" },
-          include: {
-            attribute: true,
-          },
-        },
-      },
+      include: getPositionInclude(),
     });
 
-    res.status(201).json(position);
+    res.status(201).json(
+      serializePosition(position, {
+        includeAccessRules: true,
+        isAccessible: true,
+      }),
+    );
   } catch (error) {
     console.error("POST /api/positions error:", error);
 
@@ -554,6 +751,7 @@ router.post("/", async (req, res) => {
 
 router.put("/:id", async (req, res) => {
   try {
+    const userId = getDevUserId(req);
     const id = Number(req.params.id);
     const {
       title,
@@ -563,7 +761,28 @@ router.put("/:id", async (req, res) => {
       projectTags = [],
       version,
       attributes = [],
+      accessRules = [],
     } = req.body;
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!canManagePositions(currentUser)) {
+      return res.status(403).json({
+        message: "Only recruiters/admins can update positions",
+      });
+    }
 
     if (!id) {
       return res.status(400).json({
@@ -585,21 +804,74 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    const updateResult = await prisma.position.updateMany({
-      where: {
-        id,
-        version,
-      },
-      data: {
-        title,
-        shortDescription: shortDescription || null,
-        isPublic,
-        maxProjects: Number(maxProjects) || 3,
-        projectTags: sanitizedProjectTags,
-        version: {
-          increment: 1,
+    const { normalizedRules, error: accessRulesError } =
+      await getNormalizedAccessRulesOrError(accessRules);
+
+    if (accessRulesError) {
+      return res.status(400).json({
+        message: accessRulesError,
+      });
+    }
+
+    const updateResult = await prisma.$transaction(async (tx) => {
+      const updated = await tx.position.updateMany({
+        where: {
+          id,
+          version,
         },
-      },
+        data: {
+          title,
+          shortDescription: shortDescription || null,
+          isPublic,
+          maxProjects: Number(maxProjects) || 3,
+          projectTags: sanitizedProjectTags,
+          version: {
+            increment: 1,
+          },
+        },
+      });
+
+      if (updated.count === 0) {
+        return updated;
+      }
+
+      await tx.positionAttribute.deleteMany({
+        where: { positionId: id },
+      });
+
+      if (attributes.length > 0) {
+        await tx.positionAttribute.createMany({
+          data: attributes.map((item, index) => ({
+            positionId: id,
+            attributeId: item.attributeId,
+            isRequired: Boolean(item.isRequired),
+            sortOrder: Number.isInteger(item.sortOrder) ? item.sortOrder : index + 1,
+          })),
+        });
+      }
+
+      await tx.positionAccessRule.deleteMany({
+        where: {
+          positionId: id,
+        },
+      });
+
+      if (normalizedRules.length > 0) {
+        await tx.positionAccessRule.createMany({
+          data: normalizedRules.map((rule, index) => ({
+            positionId: id,
+            attributeId: rule.attributeId,
+            operator: rule.operator,
+            stringValue: rule.stringValue,
+            numericValue: rule.numericValue,
+            booleanValue: rule.booleanValue,
+            dateValue: rule.dateValue,
+            sortOrder: Number.isInteger(rule.sortOrder) ? rule.sortOrder : index + 1,
+          })),
+        });
+      }
+
+      return updated;
     });
 
     if (updateResult.count === 0) {
@@ -609,34 +881,17 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    await prisma.positionAttribute.deleteMany({
-      where: { positionId: id },
-    });
-
-    if (attributes.length > 0) {
-      await prisma.positionAttribute.createMany({
-        data: attributes.map((item, index) => ({
-          positionId: id,
-          attributeId: item.attributeId,
-          isRequired: Boolean(item.isRequired),
-          sortOrder: index + 1,
-        })),
-      });
-    }
-
     const updatedPosition = await prisma.position.findUnique({
       where: { id },
-      include: {
-        attributes: {
-          orderBy: { sortOrder: "asc" },
-          include: {
-            attribute: true,
-          },
-        },
-      },
+      include: getPositionInclude(),
     });
 
-    res.json(updatedPosition);
+    res.json(
+      serializePosition(updatedPosition, {
+        includeAccessRules: true,
+        isAccessible: true,
+      }),
+    );
   } catch (error) {
     console.error("PUT /api/positions/:id error:", error);
 
@@ -648,7 +903,28 @@ router.put("/:id", async (req, res) => {
 
 router.delete("/", async (req, res) => {
   try {
+    const userId = getDevUserId(req);
     const { ids } = req.body;
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!canManagePositions(currentUser)) {
+      return res.status(403).json({
+        message: "Only recruiters/admins can delete positions",
+      });
+    }
 
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({

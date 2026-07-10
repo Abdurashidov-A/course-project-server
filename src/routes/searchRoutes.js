@@ -1,5 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
+const { buildCandidatePositionAccessMap } = require("../utils/positionAccess");
 
 const router = express.Router();
 
@@ -91,8 +92,25 @@ async function searchCandidate(userId, query) {
     profileValues,
   ] = await Promise.all([
     prisma.position.findMany({
+      where: {},
+      orderBy: {
+        updatedAt: "desc",
+      },
+      take: 50,
+      include: {
+        accessRules: {
+          orderBy: {
+            sortOrder: "asc",
+          },
+          include: {
+            attribute: true,
+          },
+        },
+      },
+    }),
+    prisma.cv.findMany({
       where: {
-        isPublic: true,
+        userId,
       },
       orderBy: {
         updatedAt: "desc",
@@ -100,50 +118,24 @@ async function searchCandidate(userId, query) {
       take: 50,
       select: {
         id: true,
-        title: true,
-        shortDescription: true,
-        isPublic: true,
-        projectTags: true,
+        status: true,
+        positionId: true,
         updatedAt: true,
-      },
-    }),
-    prisma.cv.findMany({
-      where: {
-        userId,
-        OR: [
-          ...(statusQuery
-            ? [
-                {
-                  status: statusQuery,
-                },
-              ]
-            : []),
-          {
-            position: {
-              title: {
-                contains: query,
-                mode: "insensitive",
+        position: {
+          include: {
+            accessRules: {
+              orderBy: {
+                sortOrder: "asc",
+              },
+              include: {
+                attribute: true,
               },
             },
           },
-        ],
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 5,
-      select: {
-        id: true,
-        status: true,
-        updatedAt: true,
+        },
         _count: {
           select: {
             likes: true,
-          },
-        },
-        position: {
-          select: {
-            title: true,
           },
         },
       },
@@ -210,7 +202,19 @@ async function searchCandidate(userId, query) {
     }),
   ]);
 
-  const positions = positionsFromDatabase
+  const positionAccessMap = await buildCandidatePositionAccessMap(
+    userId,
+    positionsFromDatabase,
+  );
+  const accessiblePositions = positionsFromDatabase.filter(
+    (position) => positionAccessMap.get(position.id)?.accessible,
+  );
+  const cvPositionAccessMap = await buildCandidatePositionAccessMap(
+    userId,
+    cvs.map((cv) => cv.position).filter(Boolean),
+  );
+
+  const positions = accessiblePositions
     .filter(
       (position) =>
         includesQuery(position.title, query) ||
@@ -218,10 +222,22 @@ async function searchCandidate(userId, query) {
         matchesAnyTag(position.projectTags, query),
     )
     .slice(0, 10)
-    .map(({ projectTags, updatedAt, ...position }) => ({
+    .map(({ projectTags, updatedAt, accessRules, ...position }) => ({
       ...position,
       type: "position",
     }));
+
+  const accessibleCvs = cvs.filter((cv) =>
+    cvPositionAccessMap.get(cv.positionId)?.accessible,
+  );
+
+  const filteredCvs = accessibleCvs.filter((cv) => {
+    if (statusQuery && cv.status === statusQuery) {
+      return true;
+    }
+
+    return includesQuery(cv.position?.title, query);
+  });
 
   const projects = projectsFromDatabase
     .filter(
@@ -242,7 +258,7 @@ async function searchCandidate(userId, query) {
 
   return {
     positions,
-    cvs: cvs.map((cv) => ({
+    cvs: filteredCvs.slice(0, 5).map((cv) => ({
       id: cv.id,
       status: cv.status,
       positionTitle: cv.position?.title || "—",

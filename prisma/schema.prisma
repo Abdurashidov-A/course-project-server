@@ -93,6 +93,7 @@ model Attribute {
   updatedAt   DateTime          @updatedAt
 
   options            AttributeOption[]
+  accessRules        PositionAccessRule[]
   positionAttributes PositionAttribute[]
   profileValues      ProfileAttributeValue[]
 }
@@ -121,8 +122,29 @@ model Position {
   updatedAt        DateTime @updatedAt
 
   attributes      PositionAttribute[]
+  accessRules     PositionAccessRule[]
   cvs             Cv[]
   discussionPosts PositionDiscussionPost[]
+}
+
+model PositionAccessRule {
+  id           Int       @id @default(autoincrement())
+  positionId   Int
+  attributeId  Int
+  operator     String
+  stringValue  String?
+  numericValue Float?
+  booleanValue Boolean?
+  dateValue    DateTime?
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  attribute Attribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+
+  @@index([positionId])
+  @@index([attributeId])
 }
 
 model Cv {
