@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const passport = require("passport");
 const prisma = require("./lib/prisma");
 const attributeRoutes = require("./routes/attributeRoutes");
 const profileAttributeRoutes = require("./routes/profileAttributeRoutes");
@@ -9,10 +10,13 @@ const projectRoutes = require("./routes/projectRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const searchRoutes = require("./routes/searchRoutes");
 const adminUserRoutes = require("./routes/adminUserRoutes");
+const oauthRoutes = require("./routes/oauthRoutes");
+const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(passport.initialize());
 app.use("/api/attributes", attributeRoutes);
 app.use("/api/profile-attributes", profileAttributeRoutes);
 app.use("/api/positions", positionRoutes);
@@ -21,6 +25,7 @@ app.use("/api/projects", projectRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/search", searchRoutes);
 app.use("/api/admin/users", adminUserRoutes);
+app.use("/api/auth", oauthRoutes);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");
@@ -102,14 +107,7 @@ app.post("/api/auth/dev-login", async (req, res) => {
     }
 
     res.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        status: user.status,
-        version: user.version,
-        roles: user.roles.map((userRole) => userRole.role.name),
-      },
+      user: serializeSafeUser(user),
     });
   } catch (error) {
     console.error("Dev login failed:", error);
