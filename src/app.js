@@ -11,6 +11,7 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const searchRoutes = require("./routes/searchRoutes");
 const adminUserRoutes = require("./routes/adminUserRoutes");
 const oauthRoutes = require("./routes/oauthRoutes");
+const publicRoutes = require("./routes/publicRoutes");
 const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
@@ -24,6 +25,7 @@ app.use("/api/cvs", cvRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/search", searchRoutes);
+app.use("/api/public", publicRoutes);
 app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/auth", oauthRoutes);
 
