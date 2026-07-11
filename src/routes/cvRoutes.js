@@ -721,6 +721,103 @@ router.patch("/:id/publish", async (req, res) => {
   }
 });
 
+router.delete("/", async (req, res) => {
+  try {
+    const userId = getDevUserId(req);
+    const rawIds = req.body?.ids;
+
+    if (!userId) {
+      return res
+        .status(401)
+        .json({ message: "Dev user id header is required" });
+    }
+
+    const currentUser = await getCurrentUserWithRoles(userId);
+
+    if (!currentUser) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!isCandidateOnly(currentUser)) {
+      return res.status(403).json({
+        message: "Only candidates can delete their own CVs",
+      });
+    }
+
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      return res.status(400).json({
+        message: "At least one CV id is required",
+      });
+    }
+
+    const normalizedIds = [...new Set(rawIds.map((id) => Number(id)))];
+
+    if (
+      normalizedIds.length === 0 ||
+      normalizedIds.some((id) => !Number.isInteger(id) || id <= 0)
+    ) {
+      return res.status(400).json({
+        message: "CV ids must be a non-empty array of positive integers",
+      });
+    }
+
+    const existingCvs = await prisma.cv.findMany({
+      where: {
+        id: {
+          in: normalizedIds,
+        },
+      },
+      select: {
+        id: true,
+        userId: true,
+      },
+    });
+
+    if (existingCvs.length !== normalizedIds.length) {
+      return res.status(404).json({
+        message: "One or more CVs were not found",
+      });
+    }
+
+    const hasNotOwnedCv = existingCvs.some((cv) => cv.userId !== userId);
+
+    if (hasNotOwnedCv) {
+      return res.status(403).json({
+        message: "You can delete only your own CVs.",
+      });
+    }
+
+    const [, deletedCvs] = await prisma.$transaction([
+      prisma.cvLike.deleteMany({
+        where: {
+          cvId: {
+            in: normalizedIds,
+          },
+        },
+      }),
+      prisma.cv.deleteMany({
+        where: {
+          id: {
+            in: normalizedIds,
+          },
+          userId,
+        },
+      }),
+    ]);
+
+    res.json({
+      deletedCount: deletedCvs.count,
+    });
+  } catch (error) {
+    console.error("DELETE /api/cvs error:", error);
+    res.status(500).json({
+      message: "Failed to delete CVs",
+    });
+  }
+});
+
 router.post("/", async (req, res) => {
   try {
     const userId = getDevUserId(req);
