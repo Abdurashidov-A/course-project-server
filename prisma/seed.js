@@ -107,6 +107,7 @@ async function main() {
   console.log("Seed completed");
 }
 
+
 main()
   .catch((error) => {
     console.error(error);
