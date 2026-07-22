@@ -60,70 +60,7 @@ function serializePublicPosition(position) {
   };
 }
 
-async function getPopularPublicPositions() {
-  const positions = await prisma.position.findMany({
-    where: {
-      isPublic: true,
-    },
-    select: {
-      id: true,
-      title: true,
-      shortDescription: true,
-      updatedAt: true,
-    },
-  });
-
-  if (positions.length === 0) {
-    return [];
-  }
-
-  const positionIds = positions.map((position) => position.id);
-  const publishedCounts = await prisma.cv.groupBy({
-    by: ["positionId"],
-    where: {
-      positionId: {
-        in: positionIds,
-      },
-      status: "PUBLISHED",
-    },
-    _count: {
-      positionId: true,
-    },
-  });
-
-  const publishedByPositionId = new Map(
-    publishedCounts.map((item) => [item.positionId, item._count.positionId]),
-  );
-
-  return positions
-    .map((position) => ({
-      id: position.id,
-      title: position.title,
-      shortDescription: position.shortDescription,
-      publishedCvsCount: publishedByPositionId.get(position.id) || 0,
-      updatedAt: position.updatedAt,
-    }))
-    .sort((left, right) => {
-      if (right.publishedCvsCount !== left.publishedCvsCount) {
-        return right.publishedCvsCount - left.publishedCvsCount;
-      }
-
-      return right.updatedAt.getTime() - left.updatedAt.getTime();
-    })
-    .slice(0, 5)
-    .map(({ updatedAt, ...item }) => item);
-}
-
-async function getTechnologyTagCloud() {
-  const positions = await prisma.position.findMany({
-    where: {
-      isPublic: true,
-    },
-    select: {
-      projectTags: true,
-    },
-  });
-
+function buildTechnologyTagCloud(positions) {
   const tagsMap = new Map();
 
   positions.forEach((position) => {
@@ -157,6 +94,58 @@ async function getTechnologyTagCloud() {
     .slice(0, 15);
 }
 
+async function getPublicDashboardData() {
+  const positions = await prisma.position.findMany({
+    where: {
+      isPublic: true,
+    },
+    select: {
+      id: true,
+      title: true,
+      shortDescription: true,
+      projectTags: true,
+      updatedAt: true,
+      _count: {
+        select: {
+          cvs: {
+            where: {
+              status: "PUBLISHED",
+            },
+          },
+        },
+      },
+    },
+  });
+  const popularPositions = positions
+    .map((position) => ({
+      id: position.id,
+      title: position.title,
+      shortDescription: position.shortDescription,
+      publishedCvsCount: position._count.cvs,
+      updatedAt: position.updatedAt,
+    }))
+    .sort((left, right) => {
+      if (right.publishedCvsCount !== left.publishedCvsCount) {
+        return right.publishedCvsCount - left.publishedCvsCount;
+      }
+
+      return right.updatedAt.getTime() - left.updatedAt.getTime();
+    })
+    .slice(0, 5)
+    .map(({ updatedAt, ...item }) => item);
+  const publishedCvsCount = positions.reduce(
+    (total, position) => total + position._count.cvs,
+    0,
+  );
+
+  return {
+    publicPositionsCount: positions.length,
+    publishedCvsCount,
+    popularPositions,
+    technologyTagCloud: buildTechnologyTagCloud(positions),
+  };
+}
+
 router.get("/positions", async (req, res) => {
   try {
     const positions = await prisma.position.findMany({
@@ -180,40 +169,20 @@ router.get("/positions", async (req, res) => {
 
 router.get("/stats", async (req, res) => {
   try {
-    const [
-      publicPositionsCount,
-      publishedCvsCount,
-      totalAttributesCount,
-      popularPublicPositions,
-      technologyTagCloud,
-    ] = await Promise.all([
-      prisma.position.count({
-        where: {
-          isPublic: true,
-        },
-      }),
-      prisma.cv.count({
-        where: {
-          status: "PUBLISHED",
-          position: {
-            isPublic: true,
-          },
-        },
-      }),
+    const [totalAttributesCount, dashboardData] = await Promise.all([
       prisma.attribute.count(),
-      getPopularPublicPositions(),
-      getTechnologyTagCloud(),
+      getPublicDashboardData(),
     ]);
 
     res.json({
       role: "GUEST",
       stats: {
-        publicPositionsCount,
-        publishedCvsCount,
+        publicPositionsCount: dashboardData.publicPositionsCount,
+        publishedCvsCount: dashboardData.publishedCvsCount,
         totalAttributesCount,
       },
-      popularPositions: popularPublicPositions,
-      technologyTagCloud,
+      popularPositions: dashboardData.popularPositions,
+      technologyTagCloud: dashboardData.technologyTagCloud,
     });
   } catch (error) {
     console.error("GET /api/public/stats error:", error);

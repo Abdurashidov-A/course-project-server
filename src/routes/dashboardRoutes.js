@@ -38,167 +38,7 @@ function getViewerRole(user) {
   return null;
 }
 
-function getFilledProfileAttributesWhere(userId) {
-  return {
-    userId,
-    OR: [
-      {
-        AND: [
-          {
-            stringValue: {
-              not: null,
-            },
-          },
-          {
-            stringValue: {
-              not: "",
-            },
-          },
-        ],
-      },
-      {
-        AND: [
-          {
-            textValue: {
-              not: null,
-            },
-          },
-          {
-            textValue: {
-              not: "",
-            },
-          },
-        ],
-      },
-      {
-        numericValue: {
-          not: null,
-        },
-      },
-      {
-        booleanValue: {
-          not: null,
-        },
-      },
-      {
-        dateValue: {
-          not: null,
-        },
-      },
-      {
-        periodStart: {
-          not: null,
-        },
-      },
-      {
-        periodEnd: {
-          not: null,
-        },
-      },
-      {
-        AND: [
-          {
-            imageUrl: {
-              not: null,
-            },
-          },
-          {
-            imageUrl: {
-              not: "",
-            },
-          },
-        ],
-      },
-    ],
-  };
-}
-
-async function getPopularPositions(positionWhere) {
-  const positions = await prisma.position.findMany({
-    where: positionWhere,
-    select: {
-      id: true,
-      title: true,
-      shortDescription: true,
-      updatedAt: true,
-    },
-  });
-
-  if (positions.length === 0) {
-    return [];
-  }
-
-  const positionIds = positions.map((position) => position.id);
-
-  const [submittedCounts, publishedCounts] = await Promise.all([
-    prisma.cv.groupBy({
-      by: ["positionId"],
-      where: {
-        positionId: {
-          in: positionIds,
-        },
-      },
-      _count: {
-        positionId: true,
-      },
-    }),
-    prisma.cv.groupBy({
-      by: ["positionId"],
-      where: {
-        positionId: {
-          in: positionIds,
-        },
-        status: "PUBLISHED",
-      },
-      _count: {
-        positionId: true,
-      },
-    }),
-  ]);
-
-  const submittedByPositionId = new Map(
-    submittedCounts.map((item) => [item.positionId, item._count.positionId]),
-  );
-  const publishedByPositionId = new Map(
-    publishedCounts.map((item) => [item.positionId, item._count.positionId]),
-  );
-
-  const positionsWithCounts = positions.map((position) => ({
-    id: position.id,
-    title: position.title,
-    shortDescription: position.shortDescription,
-    updatedAt: position.updatedAt,
-    submittedCvsCount: submittedByPositionId.get(position.id) || 0,
-    publishedCvsCount: publishedByPositionId.get(position.id) || 0,
-  }));
-
-  const hasAnySubmittedCvs = positionsWithCounts.some(
-    (position) => position.submittedCvsCount > 0,
-  );
-
-  const sortedPositions = hasAnySubmittedCvs
-    ? positionsWithCounts.sort((left, right) => {
-        if (right.submittedCvsCount !== left.submittedCvsCount) {
-          return right.submittedCvsCount - left.submittedCvsCount;
-        }
-
-        return left.title.localeCompare(right.title);
-      })
-    : positionsWithCounts.sort(
-        (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
-      );
-
-  return sortedPositions.slice(0, 5).map(({ updatedAt, ...position }) => position);
-}
-
-async function getTechnologyTagCloud(positionWhere) {
-  const positions = await prisma.position.findMany({
-    where: positionWhere,
-    select: {
-      projectTags: true,
-    },
-  });
-
+function buildTechnologyTagCloud(positions) {
   const tagsMap = new Map();
 
   positions.forEach((position) => {
@@ -235,41 +75,126 @@ async function getTechnologyTagCloud(positionWhere) {
     .slice(0, 15);
 }
 
+async function getPositionDashboardSections(positionWhere) {
+  const publicOnly = positionWhere?.isPublic === true;
+  const positions = await prisma.$queryRaw`
+    SELECT
+      p.id,
+      p.title,
+      p."shortDescription",
+      p."projectTags",
+      p."updatedAt",
+      COUNT(cv.id)::integer AS "submittedCvsCount",
+      COUNT(cv.id) FILTER (WHERE cv.status = 'PUBLISHED')::integer
+        AS "publishedCvsCount"
+    FROM "Position" p
+    LEFT JOIN "Cv" cv ON cv."positionId" = p.id
+    WHERE ${publicOnly}::boolean = false OR p."isPublic" = true
+    GROUP BY p.id
+  `;
+
+  if (positions.length === 0) {
+    return {
+      popularPositions: [],
+      technologyTagCloud: [],
+    };
+  }
+
+  const positionsWithCounts = positions.map((position) => ({
+    id: position.id,
+    title: position.title,
+    shortDescription: position.shortDescription,
+    projectTags: position.projectTags,
+    updatedAt: position.updatedAt,
+    submittedCvsCount: position.submittedCvsCount,
+    publishedCvsCount: position.publishedCvsCount,
+  }));
+
+  const hasAnySubmittedCvs = positionsWithCounts.some(
+    (position) => position.submittedCvsCount > 0,
+  );
+
+  const sortedPositions = hasAnySubmittedCvs
+    ? positionsWithCounts.sort((left, right) => {
+        if (right.submittedCvsCount !== left.submittedCvsCount) {
+          return right.submittedCvsCount - left.submittedCvsCount;
+        }
+
+        return left.title.localeCompare(right.title);
+      })
+    : positionsWithCounts.sort(
+        (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
+      );
+
+  return {
+    popularPositions: sortedPositions
+      .slice(0, 5)
+      .map(({ updatedAt, projectTags, ...position }) => position),
+    technologyTagCloud: buildTechnologyTagCloud(positions),
+  };
+}
+
+async function getCandidateStats(userId) {
+  const [stats] = await prisma.$queryRaw`
+    SELECT
+      (SELECT COUNT(*)::integer FROM "Cv" WHERE "userId" = ${userId})
+        AS "totalCvs",
+      (SELECT COUNT(*)::integer FROM "Cv"
+        WHERE "userId" = ${userId} AND status = 'PUBLISHED')
+        AS "publishedCvs",
+      (SELECT COUNT(*)::integer FROM "Cv"
+        WHERE "userId" = ${userId} AND status = 'DRAFT')
+        AS "draftCvs",
+      (SELECT COUNT(*)::integer FROM "Project" WHERE "userId" = ${userId})
+        AS projects,
+      (SELECT COUNT(*)::integer FROM "Attribute") AS "totalAttributes",
+      (
+        SELECT COUNT(*)::integer
+        FROM "ProfileAttributeValue"
+        WHERE "userId" = ${userId}
+          AND (
+            ("stringValue" IS NOT NULL AND "stringValue" <> '')
+            OR ("textValue" IS NOT NULL AND "textValue" <> '')
+            OR "numericValue" IS NOT NULL
+            OR "booleanValue" IS NOT NULL
+            OR "dateValue" IS NOT NULL
+            OR "periodStart" IS NOT NULL
+            OR "periodEnd" IS NOT NULL
+            OR ("imageUrl" IS NOT NULL AND "imageUrl" <> '')
+          )
+      ) AS "filledProfileAttributes"
+  `;
+
+  return stats;
+}
+
+async function getRecruiterStats() {
+  const [stats] = await prisma.$queryRaw`
+    SELECT
+      (SELECT COUNT(*)::integer FROM "Position") AS positions,
+      (SELECT COUNT(*)::integer FROM "Attribute") AS attributes,
+      (SELECT COUNT(*)::integer FROM "Cv" WHERE status = 'PUBLISHED')
+        AS "publishedCvs",
+      (
+        SELECT COUNT(DISTINCT "userId")::integer
+        FROM "Cv"
+        WHERE status = 'PUBLISHED'
+      ) AS "candidatesWithPublishedCvs",
+      (SELECT COUNT(*)::integer FROM "Position" WHERE "isPublic" = true)
+        AS "publicPositions"
+  `;
+
+  return stats;
+}
+
 async function buildCandidateDashboard(userId) {
   const [
-    totalCvs,
-    publishedCvs,
-    draftCvs,
-    projects,
-    totalAttributes,
-    filledProfileAttributes,
+    stats,
     recentCvs,
     recentProjects,
-    popularPositions,
-    technologyTagCloud,
+    positionSections,
   ] = await Promise.all([
-    prisma.cv.count({
-      where: { userId },
-    }),
-    prisma.cv.count({
-      where: {
-        userId,
-        status: "PUBLISHED",
-      },
-    }),
-    prisma.cv.count({
-      where: {
-        userId,
-        status: "DRAFT",
-      },
-    }),
-    prisma.project.count({
-      where: { userId },
-    }),
-    prisma.attribute.count(),
-    prisma.profileAttributeValue.count({
-      where: getFilledProfileAttributesWhere(userId),
-    }),
+    getCandidateStats(userId),
     prisma.cv.findMany({
       where: { userId },
       orderBy: {
@@ -305,10 +230,7 @@ async function buildCandidateDashboard(userId) {
         version: true,
       },
     }),
-    getPopularPositions({
-      isPublic: true,
-    }),
-    getTechnologyTagCloud({
+    getPositionDashboardSections({
       isPublic: true,
     }),
   ]);
@@ -316,54 +238,32 @@ async function buildCandidateDashboard(userId) {
   return {
     role: "CANDIDATE",
     stats: {
-      totalCvs,
-      publishedCvs,
-      draftCvs,
-      projects,
-      filledProfileAttributes,
-      totalAttributes,
+      totalCvs: stats.totalCvs,
+      publishedCvs: stats.publishedCvs,
+      draftCvs: stats.draftCvs,
+      projects: stats.projects,
+      filledProfileAttributes: stats.filledProfileAttributes,
+      totalAttributes: stats.totalAttributes,
       missingProfileAttributes: Math.max(
-        totalAttributes - filledProfileAttributes,
+        stats.totalAttributes - stats.filledProfileAttributes,
         0,
       ),
     },
     recentCvs,
     recentProjects,
-    popularPositions,
-    technologyTagCloud,
+    popularPositions: positionSections.popularPositions,
+    technologyTagCloud: positionSections.technologyTagCloud,
   };
 }
 
 async function buildRecruiterDashboard(role) {
   const [
-    positions,
-    attributes,
-    publishedCvs,
-    publicPositions,
-    candidatesWithPublishedCvsGroups,
+    stats,
     recentPublishedCvs,
     recentPositions,
-    popularPositions,
-    technologyTagCloud,
+    positionSections,
   ] = await Promise.all([
-    prisma.position.count(),
-    prisma.attribute.count(),
-    prisma.cv.count({
-      where: {
-        status: "PUBLISHED",
-      },
-    }),
-    prisma.position.count({
-      where: {
-        isPublic: true,
-      },
-    }),
-    prisma.cv.groupBy({
-      by: ["userId"],
-      where: {
-        status: "PUBLISHED",
-      },
-    }),
+    getRecruiterStats(),
     prisma.cv.findMany({
       where: {
         status: "PUBLISHED",
@@ -408,18 +308,17 @@ async function buildRecruiterDashboard(role) {
         updatedAt: true,
       },
     }),
-    getPopularPositions(),
-    getTechnologyTagCloud(),
+    getPositionDashboardSections(),
   ]);
 
   return {
     role,
     stats: {
-      positions,
-      attributes,
-      publishedCvs,
-      candidatesWithPublishedCvs: candidatesWithPublishedCvsGroups.length,
-      publicPositions,
+      positions: stats.positions,
+      attributes: stats.attributes,
+      publishedCvs: stats.publishedCvs,
+      candidatesWithPublishedCvs: stats.candidatesWithPublishedCvs,
+      publicPositions: stats.publicPositions,
     },
     recentPublishedCvs: recentPublishedCvs.map((cv) => ({
       id: cv.id,
@@ -431,8 +330,8 @@ async function buildRecruiterDashboard(role) {
       position: cv.position,
     })),
     recentPositions,
-    popularPositions,
-    technologyTagCloud,
+    popularPositions: positionSections.popularPositions,
+    technologyTagCloud: positionSections.technologyTagCloud,
   };
 }
 
