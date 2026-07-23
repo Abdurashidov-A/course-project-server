@@ -91,10 +91,65 @@ router.delete("/", async (req, res) => {
       });
     }
 
+    const normalizedIds = [...new Set(ids.map(Number))];
+
+    if (
+      normalizedIds.some(
+        (id) => !Number.isInteger(id) || id <= 0,
+      )
+    ) {
+      return res.status(400).json({
+        message: "Attribute ids must be positive integers",
+      });
+    }
+
+    const linkedAttributes = await prisma.attribute.findMany({
+      where: {
+        id: {
+          in: normalizedIds,
+        },
+        OR: [
+          {
+            positionAttributes: {
+              some: {},
+            },
+          },
+          {
+            accessRules: {
+              some: {},
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        _count: {
+          select: {
+            positionAttributes: true,
+            accessRules: true,
+          },
+        },
+      },
+    });
+
+    if (linkedAttributes.length > 0) {
+      return res.status(409).json({
+        message:
+          "Cannot delete attributes that are used by positions or access rules",
+        attributes: linkedAttributes.map((attribute) => ({
+          id: attribute.id,
+          name: attribute.name,
+          positionUsages: attribute._count.positionAttributes,
+          accessRuleUsages: attribute._count.accessRules,
+        })),
+      });
+    }
+
     const deletedAttributes = await prisma.attribute.deleteMany({
       where: {
         id: {
-          in: ids,
+          in: normalizedIds,
         },
       },
     });
@@ -104,6 +159,13 @@ router.delete("/", async (req, res) => {
     });
   } catch (error) {
     console.error("DELETE /api/attributes error:", error);
+
+    if (error.code === "P2003") {
+      return res.status(409).json({
+        message:
+          "Cannot delete attributes that are used by positions or access rules",
+      });
+    }
 
     res.status(500).json({
       message: "Failed to delete attributes",
