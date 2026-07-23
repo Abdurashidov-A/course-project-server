@@ -1,4 +1,5 @@
 const { PrismaClient } = require("@prisma/client");
+const { getNamedDemoAccounts } = require("../src/utils/demoCredentials");
 
 const prisma = new PrismaClient();
 
@@ -58,6 +59,46 @@ async function main() {
       { userId: recruiter.id, roleId: recruiterRole.id },
       { userId: admin.id, roleId: adminRole.id },
     ],
+    skipDuplicates: true,
+  });
+
+  const rolesByName = new Map([
+    ["CANDIDATE", candidateRole],
+    ["RECRUITER", recruiterRole],
+    ["ADMIN", adminRole],
+  ]);
+  const namedDemoUsers = [];
+
+  for (const account of getNamedDemoAccounts()) {
+    const user = await prisma.user.upsert({
+      where: { email: account.email },
+      update: {
+        name: account.name,
+        status: "ACTIVE",
+      },
+      create: {
+        email: account.email,
+        name: account.name,
+        status: "ACTIVE",
+      },
+    });
+
+    namedDemoUsers.push({
+      userId: user.id,
+      roleId: rolesByName.get(account.role).id,
+    });
+  }
+
+  await prisma.userRole.deleteMany({
+    where: {
+      userId: {
+        in: namedDemoUsers.map((item) => item.userId),
+      },
+    },
+  });
+
+  await prisma.userRole.createMany({
+    data: namedDemoUsers,
     skipDuplicates: true,
   });
 

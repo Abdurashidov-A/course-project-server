@@ -8,6 +8,7 @@ const {
   isProviderConfigured,
   verifyOAuthLoginToken,
 } = require("../utils/oauth");
+const { findDemoCredential } = require("../utils/demoCredentials");
 const { serializeSafeUser } = require("../utils/safeUser");
 
 const router = express.Router();
@@ -157,6 +158,52 @@ router.post("/oauth/complete", async (req, res) => {
     console.error("POST /api/auth/oauth/complete failed:", error);
     return res.status(500).json({
       message: error.message || "OAuth login failed",
+    });
+  }
+});
+
+router.post("/test-login", async (req, res) => {
+  try {
+    const credential = findDemoCredential(req.body?.login, req.body?.password);
+
+    if (!credential) {
+      return res.status(401).json({
+        message: "Invalid login or password",
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: {
+        email: credential.email,
+      },
+      include: {
+        roles: {
+          include: {
+            role: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Invalid login or password",
+      });
+    }
+
+    if (user.status === "BLOCKED") {
+      return res.status(403).json({
+        message: "User is blocked",
+      });
+    }
+
+    return res.json({
+      user: serializeSafeUser(user),
+    });
+  } catch (error) {
+    console.error("POST /api/auth/test-login failed:", error);
+    return res.status(500).json({
+      message: "Test login failed",
     });
   }
 });
