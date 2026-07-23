@@ -277,7 +277,21 @@ router.get("/count", async (req, res) => {
   }
 });
 
-router
+router.get("/title", async (req, res) => {
+  try {
+    const title = await prisma.position.findMany({
+      select: {
+        title: true,
+      },
+    });
+
+    return res.status(200).json({ title });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Failed to load position title",
+    });
+  }
+});
 
 router.get("/:positionId/cvs", async (req, res) => {
   try {
