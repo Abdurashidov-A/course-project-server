@@ -233,7 +233,10 @@ router.get("/", async (req, res) => {
       !roleNames.includes("ADMIN");
 
     if (isCandidateOnly) {
-      const accessMap = await buildCandidatePositionAccessMap(userId, positions);
+      const accessMap = await buildCandidatePositionAccessMap(
+        userId,
+        positions,
+      );
 
       return res.json(
         positions
@@ -261,6 +264,20 @@ router.get("/", async (req, res) => {
     });
   }
 });
+
+router.get("/count", async (req, res) => {
+  try {
+    const count = await prisma.position.count();
+
+    return res.status(200).json({ count });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Failed to load position count",
+    });
+  }
+});
+
+router
 
 router.get("/:positionId/cvs", async (req, res) => {
   try {
@@ -361,7 +378,9 @@ router.get("/:positionId/cvs", async (req, res) => {
         createdAt: cv.createdAt,
         updatedAt: cv.updatedAt,
         likesCount: cv._count.likes,
-        likedByCurrentUser: Array.isArray(cv.likes) ? cv.likes.length > 0 : false,
+        likedByCurrentUser: Array.isArray(cv.likes)
+          ? cv.likes.length > 0
+          : false,
         candidate: cv.user,
       })),
     });
@@ -604,7 +623,10 @@ router.post("/:id/duplicate", async (req, res) => {
         return null;
       }
 
-      const duplicatedTitle = await generateDuplicateTitle(tx, sourcePosition.title);
+      const duplicatedTitle = await generateDuplicateTitle(
+        tx,
+        sourcePosition.title,
+      );
 
       return tx.position.create({
         data: {
@@ -727,7 +749,9 @@ router.post("/", async (req, res) => {
           create: attributes.map((item, index) => ({
             attributeId: item.attributeId,
             isRequired: Boolean(item.isRequired),
-            sortOrder: Number.isInteger(item.sortOrder) ? item.sortOrder : index + 1,
+            sortOrder: Number.isInteger(item.sortOrder)
+              ? item.sortOrder
+              : index + 1,
           })),
         },
       },
@@ -845,7 +869,9 @@ router.put("/:id", async (req, res) => {
             positionId: id,
             attributeId: item.attributeId,
             isRequired: Boolean(item.isRequired),
-            sortOrder: Number.isInteger(item.sortOrder) ? item.sortOrder : index + 1,
+            sortOrder: Number.isInteger(item.sortOrder)
+              ? item.sortOrder
+              : index + 1,
           })),
         });
       }
@@ -866,7 +892,9 @@ router.put("/:id", async (req, res) => {
             numericValue: rule.numericValue,
             booleanValue: rule.booleanValue,
             dateValue: rule.dateValue,
-            sortOrder: Number.isInteger(rule.sortOrder) ? rule.sortOrder : index + 1,
+            sortOrder: Number.isInteger(rule.sortOrder)
+              ? rule.sortOrder
+              : index + 1,
           })),
         });
       }
