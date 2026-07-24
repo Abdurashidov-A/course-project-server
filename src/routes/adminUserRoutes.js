@@ -59,7 +59,7 @@ function serializeAdminUser(user) {
   };
 }
 
-async function requireAdmin(req, res) {
+async function requireAdmin(req, res, forbiddenMessage = "Access denied") {
   const userId = getDevUserId(req);
 
   if (!userId) {
@@ -80,7 +80,7 @@ async function requireAdmin(req, res) {
 
   if (!isAdminUser(currentUser)) {
     res.status(403).json({
-      message: "Access denied",
+      message: forbiddenMessage,
     });
     return null;
   }
@@ -104,7 +104,8 @@ router.get("/", async (req, res) => {
         ? Math.min(rawPageSize, 100)
         : 20;
     const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
-    const role = typeof req.query.role === "string" ? req.query.role.trim() : "";
+    const role =
+      typeof req.query.role === "string" ? req.query.role.trim() : "";
     const status =
       typeof req.query.status === "string" ? req.query.status.trim() : "";
 
@@ -174,6 +175,159 @@ router.get("/", async (req, res) => {
     console.error("GET /api/admin/users error:", error);
     res.status(500).json({
       message: "Failed to load users",
+    });
+  }
+});
+
+router.delete("/", async (req, res) => {
+  try {
+    const currentUser = await requireAdmin(
+      req,
+      res,
+      "Only admins can delete users",
+    );
+
+    if (!currentUser) {
+      return;
+    }
+
+    const rawIds = req.body?.ids;
+
+    if (!Array.isArray(rawIds)) {
+      return res.status(400).json({
+        message: "User ids must be an array",
+      });
+    }
+
+    if (rawIds.length === 0) {
+      return res.status(400).json({
+        message: "At least one user id is required",
+      });
+    }
+
+    if (rawIds.some((userId) => typeof userId !== "string" || !userId.trim())) {
+      return res.status(400).json({
+        message: "All user ids must be non-empty strings",
+      });
+    }
+
+    const userIds = [...new Set(rawIds.map((userId) => userId.trim()))];
+    const deletedCount = await prisma.$transaction(async (tx) => {
+      const existingUsers = await tx.user.findMany({
+        where: {
+          id: {
+            in: userIds,
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (existingUsers.length !== userIds.length) {
+        return null;
+      }
+
+      const ownedCvs = await tx.cv.findMany({
+        where: {
+          userId: {
+            in: userIds,
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+      const ownedCvIds = ownedCvs.map((cv) => cv.id);
+      const cvLikeFilters = [
+        {
+          userId: {
+            in: userIds,
+          },
+        },
+      ];
+
+      if (ownedCvIds.length > 0) {
+        cvLikeFilters.push({
+          cvId: {
+            in: ownedCvIds,
+          },
+        });
+      }
+
+      await tx.cvLike.deleteMany({
+        where: {
+          OR: cvLikeFilters,
+        },
+      });
+      await tx.positionDiscussionPost.deleteMany({
+        where: {
+          authorId: {
+            in: userIds,
+          },
+        },
+      });
+      await tx.oAuthAccount.deleteMany({
+        where: {
+          userId: {
+            in: userIds,
+          },
+        },
+      });
+      await tx.profileAttributeValue.deleteMany({
+        where: {
+          userId: {
+            in: userIds,
+          },
+        },
+      });
+      await tx.project.deleteMany({
+        where: {
+          userId: {
+            in: userIds,
+          },
+        },
+      });
+      await tx.cv.deleteMany({
+        where: {
+          userId: {
+            in: userIds,
+          },
+        },
+      });
+      await tx.userRole.deleteMany({
+        where: {
+          userId: {
+            in: userIds,
+          },
+        },
+      });
+
+      const deletedUsers = await tx.user.deleteMany({
+        where: {
+          id: {
+            in: userIds,
+          },
+        },
+      });
+
+      return deletedUsers.count;
+    });
+
+    if (deletedCount === null) {
+      return res.status(404).json({
+        message: "One or more users were not found",
+      });
+    }
+
+    res.json({
+      deletedCount,
+      deletedCurrentUser: userIds.includes(currentUser.id),
+    });
+  } catch (error) {
+    console.error("DELETE /api/admin/users error:", error);
+    res.status(500).json({
+      message: "Failed to delete users",
     });
   }
 });
