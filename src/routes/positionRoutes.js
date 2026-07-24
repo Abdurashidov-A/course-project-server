@@ -293,6 +293,27 @@ router.get("/title", async (req, res) => {
   }
 });
 
+router.get("/search", async (req, res) => {
+  try {
+    const search = req.query.q;
+
+    const positions = await prisma.position.findMany({
+      where: {
+        title: {
+          contains: search,
+          mode: "insensitive",
+        },
+      },
+    });
+
+    return res.status(200).json({ positions });
+  } catch (error) {
+    return res.status(500).json({
+      message: "Failed to find position title",
+    });
+  }
+});
+
 router.get("/:positionId/cvs", async (req, res) => {
   try {
     const userId = getDevUserId(req);
