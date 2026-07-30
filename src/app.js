@@ -15,7 +15,29 @@ const publicRoutes = require("./routes/publicRoutes");
 const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
-app.use(cors());
+const defaultClientOrigins = [
+  "http://localhost:5173",
+  "https://course-project-client-one.vercel.app",
+];
+const allowedClientOrigins = new Set(
+  (process.env.CLIENT_ORIGIN || defaultClientOrigins.join(","))
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedClientOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(null, false);
+    },
+  }),
+);
 app.use(express.json());
 app.use(passport.initialize());
 app.use("/api/attributes", attributeRoutes);

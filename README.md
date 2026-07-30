@@ -33,7 +33,7 @@ Example values only. Do not commit real secrets.
 DATABASE_URL=
 DIRECT_URL=
 PORT=4000
-CLIENT_ORIGIN=http://localhost:5173
+CLIENT_ORIGIN=http://localhost:5173,https://course-project-client-one.vercel.app
 CLIENT_URL=http://localhost:5173
 OAUTH_LOGIN_TOKEN_SECRET=
 GOOGLE_CLIENT_ID=
