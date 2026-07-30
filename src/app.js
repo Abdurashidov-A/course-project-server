@@ -12,32 +12,11 @@ const searchRoutes = require("./routes/searchRoutes");
 const adminUserRoutes = require("./routes/adminUserRoutes");
 const oauthRoutes = require("./routes/oauthRoutes");
 const publicRoutes = require("./routes/publicRoutes");
+const salesforceRoutes = require("./routes/salesforceRoutes");
 const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
-const defaultClientOrigins = [
-  "http://localhost:5173",
-  "https://course-project-client-one.vercel.app",
-];
-const allowedClientOrigins = new Set(
-  (process.env.CLIENT_ORIGIN || defaultClientOrigins.join(","))
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean),
-);
-
-app.use(
-  cors({
-    origin(origin, callback) {
-      if (!origin || allowedClientOrigins.has(origin)) {
-        callback(null, true);
-        return;
-      }
-
-      callback(null, false);
-    },
-  }),
-);
+app.use(cors());
 app.use(express.json());
 app.use(passport.initialize());
 app.use("/api/attributes", attributeRoutes);
@@ -50,6 +29,7 @@ app.use("/api/search", searchRoutes);
 app.use("/api/public", publicRoutes);
 app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/auth", oauthRoutes);
+app.use("/api/integrations/salesforce", salesforceRoutes);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");

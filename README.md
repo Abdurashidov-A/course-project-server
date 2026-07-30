@@ -33,7 +33,7 @@ Example values only. Do not commit real secrets.
 DATABASE_URL=
 DIRECT_URL=
 PORT=4000
-CLIENT_ORIGIN=http://localhost:5173,https://course-project-client-one.vercel.app
+CLIENT_ORIGIN=http://localhost:5173
 CLIENT_URL=http://localhost:5173
 OAUTH_LOGIN_TOKEN_SECRET=
 GOOGLE_CLIENT_ID=
@@ -42,6 +42,9 @@ GOOGLE_CALLBACK_URL=http://localhost:4000/api/auth/oauth/google/callback
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 GITHUB_CALLBACK_URL=http://localhost:4000/api/auth/oauth/github/callback
+SALESFORCE_LOGIN_URL=https://your-domain.my.salesforce.com
+SALESFORCE_CLIENT_ID=
+SALESFORCE_CLIENT_SECRET=
 ```
 
 ## Run Commands
@@ -134,6 +137,17 @@ This keeps the implementation aligned with the relational course requirement and
 - `GET /api/admin/users`
 - `PATCH /api/admin/users/:id/role`
 - `PATCH /api/admin/users/:id/status`
+
+### Salesforce
+
+- `GET /api/integrations/salesforce/status`
+- `POST /api/integrations/salesforce/profiles/:userId`
+
+Salesforce credentials remain server-only. A profile owner in any role, or an
+Administrator, can submit an account name and optional phone number. The server
+combines those values with the user's built-in name and email, then finds or
+creates a Salesforce Account and linked Contact. Repeating the same submission
+reuses the existing records.
 
 ## Demo Accounts
 
