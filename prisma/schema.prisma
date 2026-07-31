@@ -38,6 +38,7 @@ model User {
   projects               Project[]
   profileAttributeValues ProfileAttributeValue[]
   oauthAccounts          OAuthAccount[]
+  createdOdooTokens      PositionOdooToken[]      @relation("PositionOdooTokenCreator")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -144,6 +145,22 @@ model Position {
   accessRules     PositionAccessRule[]
   cvs             Cv[]
   discussionPosts PositionDiscussionPost[]
+  odooToken       PositionOdooToken?
+}
+
+model PositionOdooToken {
+  id          String    @id @default(cuid())
+  positionId  Int       @unique
+  tokenHash   String    @unique
+  tokenHint   String
+  version     Int       @default(1)
+  revokedAt   DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  position  Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("PositionOdooTokenCreator", fields: [createdById], references: [id], onDelete: SetNull)
 }
 
 model PositionAccessRule {
