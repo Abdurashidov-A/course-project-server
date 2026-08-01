@@ -13,6 +13,9 @@ const adminUserRoutes = require("./routes/adminUserRoutes");
 const oauthRoutes = require("./routes/oauthRoutes");
 const publicRoutes = require("./routes/publicRoutes");
 const salesforceRoutes = require("./routes/salesforceRoutes");
+const {
+  createOdooManagementRouter,
+} = require("./routes/odooManagementRoutes");
 const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
@@ -22,6 +25,10 @@ app.use(passport.initialize());
 app.use("/api/attributes", attributeRoutes);
 app.use("/api/profile-attributes", profileAttributeRoutes);
 app.use("/api/positions", positionRoutes);
+app.use(
+  "/api/positions",
+  createOdooManagementRouter({ prismaClient: prisma }),
+);
 app.use("/api/cvs", cvRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/dashboard", dashboardRoutes);
