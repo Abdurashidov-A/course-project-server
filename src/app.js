@@ -16,6 +16,7 @@ const salesforceRoutes = require("./routes/salesforceRoutes");
 const {
   createOdooManagementRouter,
 } = require("./routes/odooManagementRoutes");
+const { createOdooExternalRouter } = require("./routes/odooExternalRoutes");
 const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
@@ -37,6 +38,10 @@ app.use("/api/public", publicRoutes);
 app.use("/api/admin/users", adminUserRoutes);
 app.use("/api/auth", oauthRoutes);
 app.use("/api/integrations/salesforce", salesforceRoutes);
+app.use(
+  "/api/integrations/odoo",
+  createOdooExternalRouter({ prismaClient: prisma }),
+);
 
 app.get("/", (req, res) => {
   res.send("CV Management API is running");
