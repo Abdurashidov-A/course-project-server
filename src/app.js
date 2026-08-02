@@ -28,7 +28,10 @@ app.use("/api/profile-attributes", profileAttributeRoutes);
 app.use("/api/positions", positionRoutes);
 app.use(
   "/api/positions",
-  createOdooManagementRouter({ prismaClient: prisma }),
+  createOdooManagementRouter({
+    prismaClient: prisma,
+    managementCredential: process.env.ODOO_MANAGEMENT_CREDENTIAL,
+  }),
 );
 app.use("/api/cvs", cvRoutes);
 app.use("/api/projects", projectRoutes);

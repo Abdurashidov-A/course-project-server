@@ -4,8 +4,16 @@ const express = require("express");
 const {
   createOdooManagementRouter,
 } = require("../src/routes/odooManagementRoutes");
+const {
+  createOdooExternalRouter,
+} = require("../src/routes/odooExternalRoutes");
 
 const POSITION_ID = 8;
+const FAKE_MANAGEMENT_CREDENTIAL =
+  "fake-odoo-management-credential-for-tests-only";
+const WRONG_MANAGEMENT_CREDENTIAL =
+  "wrong-odoo-management-credential-for-tests-only";
+const FAKE_EXTERNAL_API_TOKEN = `cvms_odoo_${"e".repeat(43)}`;
 const FAKE_RAW_TOKEN = "cvms_odoo_fake_management_token_1";
 const SECOND_FAKE_RAW_TOKEN = "cvms_odoo_fake_management_token_2";
 const FAKE_TOKEN_HASH = "fake-token-hash-1";
@@ -77,10 +85,15 @@ function createMockPrisma(options = {}) {
     tokenFindUnique: [],
     tokenCreate: [],
     tokenUpdate: [],
+    transactions: [],
   };
   const errors = options.errors || {};
 
   const prismaClient = {
+    async $transaction(...args) {
+      calls.transactions.push(args);
+      throw new Error("Unexpected transaction");
+    },
     user: {
       async findUnique(args) {
         calls.userFindUnique.push(args);
@@ -218,6 +231,12 @@ function createMockTokenService(rawTokens = [FAKE_RAW_TOKEN]) {
 function createTestApp(options = {}) {
   const prisma = createMockPrisma(options.prisma);
   const tokenService = createMockTokenService(options.rawTokens);
+  const managementCredential = Object.prototype.hasOwnProperty.call(
+    options,
+    "managementCredential",
+  )
+    ? options.managementCredential
+    : FAKE_MANAGEMENT_CREDENTIAL;
   const app = express();
 
   app.use(express.json());
@@ -226,6 +245,7 @@ function createTestApp(options = {}) {
     createOdooManagementRouter({
       prismaClient: prisma.prismaClient,
       tokenService: tokenService.tokenService,
+      managementCredential,
     }),
   );
 
@@ -263,12 +283,23 @@ async function withServer(app, callback) {
 async function request(baseUrl, path, options = {}) {
   const headers = {};
 
+  if (options.managementCredential !== null) {
+    headers["x-odoo-management-credential"] =
+      options.managementCredential === undefined
+        ? FAKE_MANAGEMENT_CREDENTIAL
+        : options.managementCredential;
+  }
+
   if (options.userId !== null) {
     headers["x-dev-user-id"] = options.userId || "recruiter-1";
   }
 
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
+  }
+
+  if (options.authorization !== undefined) {
+    headers.Authorization = options.authorization;
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
@@ -308,8 +339,250 @@ function assertNoForbiddenKeys(value, forbiddenKeys) {
   });
 }
 
-test("enforces authentication, roles, position validation, and position existence", async () => {
+function assertNoPrismaCalls(calls) {
+  assert.deepEqual(calls.userFindUnique, []);
+  assert.deepEqual(calls.positionFindUnique, []);
+  assert.deepEqual(calls.tokenFindUnique, []);
+  assert.deepEqual(calls.tokenCreate, []);
+  assert.deepEqual(calls.tokenUpdate, []);
+  assert.deepEqual(calls.transactions, []);
+}
+
+function assertNoPositionOrTokenPrismaCalls(calls) {
+  assert.deepEqual(calls.positionFindUnique, []);
+  assert.deepEqual(calls.tokenFindUnique, []);
+  assert.deepEqual(calls.tokenCreate, []);
+  assert.deepEqual(calls.tokenUpdate, []);
+  assert.deepEqual(calls.transactions, []);
+}
+
+function assertCredentialNotExposed(result, credentials) {
+  const responseSnapshot = JSON.stringify({
+    body: result.body,
+    headers: Object.fromEntries(result.response.headers.entries()),
+  });
+
+  credentials.forEach((credential) => {
+    assert.equal(responseSnapshot.includes(credential), false);
+  });
+}
+
+function createExternalCredentialTestApp() {
+  const calls = {
+    tokenFindUnique: [],
+  };
+  const app = express();
+
+  app.use(
+    "/api/integrations/odoo",
+    createOdooExternalRouter({
+      prismaClient: {
+        positionOdooToken: {
+          async findUnique(args) {
+            calls.tokenFindUnique.push(args);
+            return null;
+          },
+        },
+      },
+      tokenService: {
+        hashToken(rawToken) {
+          assert.equal(rawToken, FAKE_MANAGEMENT_CREDENTIAL);
+          return "fake-management-credential-hash-for-external-test";
+        },
+      },
+    }),
+  );
+
+  return {
+    app,
+    calls,
+  };
+}
+
+test("fails closed when the management credential is not configured", async () => {
+  const { app, prisma } = createTestApp({
+    managementCredential: undefined,
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const result = await request(
+      baseUrl,
+      `/api/positions/${POSITION_ID}/odoo-token`,
+    );
+
+    assert.equal(result.response.status, 503);
+    assert.deepEqual(result.body, {
+      message: "Odoo management API is unavailable",
+    });
+    assertNoPrismaCalls(prisma.calls);
+  });
+});
+
+test("fails closed for empty or invalid management configuration", async () => {
+  for (const managementCredential of ["", "   ", null, 42, {}]) {
+    const { app, prisma } = createTestApp({ managementCredential });
+
+    await withServer(app, async (baseUrl) => {
+      const result = await request(
+        baseUrl,
+        `/api/positions/${POSITION_ID}/odoo-token`,
+      );
+
+      assert.equal(result.response.status, 503);
+      assert.deepEqual(result.body, {
+        message: "Odoo management API is unavailable",
+      });
+      assertNoPrismaCalls(prisma.calls);
+    });
+  }
+});
+
+test("rejects missing and wrong management credentials identically before Prisma", async () => {
+  const { app, prisma } = createTestApp();
+
+  await withServer(app, async (baseUrl) => {
+    const missing = await request(
+      baseUrl,
+      `/api/positions/${POSITION_ID}/odoo-token`,
+      { managementCredential: null },
+    );
+    const wrong = await request(
+      baseUrl,
+      `/api/positions/${POSITION_ID}/odoo-token`,
+      { managementCredential: WRONG_MANAGEMENT_CREDENTIAL },
+    );
+
+    for (const result of [missing, wrong]) {
+      assert.equal(result.response.status, 401);
+      assert.deepEqual(result.body, {
+        message: "Invalid management credential",
+      });
+      assertCredentialNotExposed(result, [
+        FAKE_MANAGEMENT_CREDENTIAL,
+        WRONG_MANAGEMENT_CREDENTIAL,
+      ]);
+    }
+
+    assertNoPrismaCalls(prisma.calls);
+  });
+});
+
+test("protects GET POST and PATCH before any Prisma operation", async () => {
+  const requests = [
+    {
+      method: "GET",
+      path: `/api/positions/${POSITION_ID}/odoo-token`,
+    },
+    {
+      method: "POST",
+      path: `/api/positions/${POSITION_ID}/odoo-token`,
+      body: {},
+    },
+    {
+      method: "PATCH",
+      path: `/api/positions/${POSITION_ID}/odoo-token/revoke`,
+      body: { version: 1 },
+    },
+  ];
+
+  for (const requestOptions of requests) {
+    const { app, prisma } = createTestApp();
+
+    await withServer(app, async (baseUrl) => {
+      const result = await request(baseUrl, requestOptions.path, {
+        method: requestOptions.method,
+        body: requestOptions.body,
+        managementCredential: null,
+      });
+
+      assert.equal(result.response.status, 401);
+      assert.deepEqual(result.body, {
+        message: "Invalid management credential",
+      });
+      assertNoPrismaCalls(prisma.calls);
+    });
+  }
+});
+
+test("preserves the missing dev user response after credential verification", async () => {
+  const { app, prisma } = createTestApp();
+
+  await withServer(app, async (baseUrl) => {
+    const result = await request(
+      baseUrl,
+      `/api/positions/${POSITION_ID}/odoo-token`,
+      { userId: null },
+    );
+
+    assert.equal(result.response.status, 401);
+    assert.deepEqual(result.body, {
+      message: "Dev user id header is required",
+    });
+    assertNoPrismaCalls(prisma.calls);
+  });
+});
+
+test("does not accept an External Odoo API token as the management credential", async () => {
+  const { app, prisma } = createTestApp();
+
+  await withServer(app, async (baseUrl) => {
+    const result = await request(
+      baseUrl,
+      `/api/positions/${POSITION_ID}/odoo-token`,
+      { managementCredential: FAKE_EXTERNAL_API_TOKEN },
+    );
+
+    assert.equal(result.response.status, 401);
+    assert.deepEqual(result.body, {
+      message: "Invalid management credential",
+    });
+    assertCredentialNotExposed(result, [
+      FAKE_MANAGEMENT_CREDENTIAL,
+      FAKE_EXTERNAL_API_TOKEN,
+    ]);
+    assertNoPrismaCalls(prisma.calls);
+  });
+});
+
+test("does not accept the management credential as an External Odoo API token", async () => {
+  const { app, calls } = createExternalCredentialTestApp();
+
+  await withServer(app, async (baseUrl) => {
+    const result = await request(
+      baseUrl,
+      "/api/integrations/odoo/position",
+      {
+        authorization: `Bearer ${FAKE_MANAGEMENT_CREDENTIAL}`,
+        managementCredential: null,
+        userId: null,
+      },
+    );
+
+    assert.equal(result.response.status, 401);
+    assert.deepEqual(result.body, {
+      message: "Invalid or missing Odoo API token",
+    });
+    assertCredentialNotExposed(result, [FAKE_MANAGEMENT_CREDENTIAL]);
+    assert.equal(calls.tokenFindUnique.length, 1);
+  });
+});
+
+test("does not expose the valid management credential after authorization", async () => {
   const { app } = createTestApp();
+
+  await withServer(app, async (baseUrl) => {
+    const result = await request(
+      baseUrl,
+      `/api/positions/${POSITION_ID}/odoo-token`,
+    );
+
+    assert.equal(result.response.status, 200);
+    assertCredentialNotExposed(result, [FAKE_MANAGEMENT_CREDENTIAL]);
+  });
+});
+
+test("enforces authentication, roles, position validation, and position existence", async () => {
+  const { app, prisma } = createTestApp();
 
   await withServer(app, async (baseUrl) => {
     const invalidId = await request(baseUrl, "/api/positions/invalid/odoo-token");
@@ -338,6 +611,7 @@ test("enforces authentication, roles, position validation, and position existenc
       { userId: "blocked-1" },
     );
     assert.equal(blockedUser.response.status, 403);
+    assertNoPositionOrTokenPrismaCalls(prisma.calls);
 
     const candidate = await request(
       baseUrl,
@@ -345,6 +619,7 @@ test("enforces authentication, roles, position validation, and position existenc
       { userId: "candidate-1" },
     );
     assert.equal(candidate.response.status, 403);
+    assertNoPositionOrTokenPrismaCalls(prisma.calls);
 
     const recruiter = await request(
       baseUrl,

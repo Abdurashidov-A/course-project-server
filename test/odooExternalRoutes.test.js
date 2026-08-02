@@ -147,6 +147,8 @@ function createMockPrisma(options = {}) {
     positionAttributeFindMany: [],
     cvFindMany: [],
     profileValueFindMany: [],
+    textCompletenessQueries: [],
+    textCompletenessResults: [],
     mutations: [],
   };
 
@@ -249,6 +251,43 @@ function createMockPrisma(options = {}) {
       model[method] = recordMutation(modelName, method);
     }
   }
+
+  prismaClient.$queryRaw = async (query) => {
+    calls.textCompletenessQueries.push(query);
+
+    if (errors.textCompletenessQuery) {
+      throw errors.textCompletenessQuery;
+    }
+
+    const publishedUserIds = cvs
+      .filter(
+        (cv) =>
+          cv.positionId === POSITION_ID && cv.status === "PUBLISHED",
+      )
+      .map((cv) => cv.userId);
+    const textAttributeIds = positionAttributes
+      .filter(
+        (positionAttribute) =>
+          positionAttribute.positionId === POSITION_ID &&
+          positionAttribute.attribute.type === "TEXT",
+      )
+      .map((positionAttribute) => positionAttribute.attributeId);
+    const results = textAttributeIds
+      .map((attributeId) => ({
+        attributeId,
+        filledCount: profileValues.filter(
+          (value) =>
+            publishedUserIds.includes(value.userId) &&
+            value.attributeId === attributeId &&
+            typeof value.textValue === "string" &&
+            value.textValue.trim().length > 0,
+        ).length,
+      }))
+      .filter((result) => result.filledCount > 0);
+
+    calls.textCompletenessResults.push(results);
+    return results;
+  };
 
   return {
     calls,
@@ -623,7 +662,7 @@ test("returns type-specific empty statistics when no published CV exists", async
       trueCount: 0,
       falseCount: 0,
     });
-    for (const attributeId of [3, 4, 5]) {
+    for (const attributeId of [3, 4]) {
       assert.deepEqual(getAttribute(result.body, attributeId).statistics, {
         kind: "POPULAR_VALUES",
         filledCount: 0,
@@ -631,6 +670,11 @@ test("returns type-specific empty statistics when no published CV exists", async
         topValues: [],
       });
     }
+    assert.deepEqual(getAttribute(result.body, 5).statistics, {
+      kind: "COMPLETENESS",
+      filledCount: 0,
+      missingCount: 0,
+    });
     assert.deepEqual(getAttribute(result.body, 6).statistics, {
       kind: "DATE_RANGE",
       filledCount: 0,
@@ -844,8 +888,13 @@ test("counts booleans while treating false as filled", async () => {
   });
 });
 
-test("groups STRING SELECT and TEXT values with deterministic top-five sorting", async () => {
+test("groups STRING and SELECT values while returning TEXT completeness", async () => {
   const users = Array.from({ length: 10 }, (_, index) => `user-${index + 1}`);
+  const privateText = [
+    "PRIVATE_TEXT_MARKER_7f31",
+    "[Private portfolio](https://private.example/profile)",
+    "Contact: private.candidate@example.test",
+  ].join("\n");
   const stringValues = [
     "Beta",
     "Alpha",
@@ -858,7 +907,7 @@ test("groups STRING SELECT and TEXT values with deterministic top-five sorting",
     "   ",
     null,
   ];
-  const { app } = createTestApp({
+  const { app, prisma } = createTestApp({
     prisma: {
       positionAttributes: [
         createPositionAttribute({ id: 1, attributeId: 1, type: "STRING" }),
@@ -876,9 +925,11 @@ test("groups STRING SELECT and TEXT values with deterministic top-five sorting",
         createProfileValue("user-2", 2, { stringValue: "Advanced" }),
         createProfileValue("user-3", 2, { stringValue: "Intermediate" }),
         createProfileValue("user-4", 2, { stringValue: " " }),
-        createProfileValue("user-1", 3, { textValue: "Summary" }),
-        createProfileValue("user-2", 3, { textValue: "Summary" }),
-        createProfileValue("user-3", 3, { textValue: "Other" }),
+        createProfileValue("user-1", 3, { textValue: privateText }),
+        createProfileValue("user-2", 3, { textValue: "Filled summary" }),
+        createProfileValue("user-3", 3, { textValue: null }),
+        createProfileValue("user-4", 3, { textValue: "" }),
+        createProfileValue("user-5", 3, { textValue: "   " }),
       ],
     },
   });
@@ -909,14 +960,51 @@ test("groups STRING SELECT and TEXT values with deterministic top-five sorting",
       ],
     });
     assert.deepEqual(getAttribute(result.body, 3).statistics, {
-      kind: "POPULAR_VALUES",
-      filledCount: 3,
-      missingCount: 7,
-      topValues: [
-        { value: "Summary", count: 2 },
-        { value: "Other", count: 1 },
-      ],
+      kind: "COMPLETENESS",
+      filledCount: 2,
+      missingCount: 8,
     });
+    const serializedBody = JSON.stringify(result.body);
+    const textStatistics = getAttribute(result.body, 3).statistics;
+
+    assert.equal(serializedBody.includes("PRIVATE_TEXT_MARKER_7f31"), false);
+    assert.equal(serializedBody.includes("https://private.example/profile"), false);
+    assert.equal(serializedBody.includes("private.candidate@example.test"), false);
+    assert.equal(serializedBody.includes("Filled summary"), false);
+    assert.equal(Object.hasOwn(textStatistics, "topValues"), false);
+    assert.equal(Object.hasOwn(textStatistics, "value"), false);
+    assert.equal(serializedBody.includes("user-1"), false);
+    assert.equal(serializedBody.includes("userId"), false);
+    assert.equal(
+      Object.hasOwn(
+        prisma.calls.profileValueFindMany[0].select,
+        "textValue",
+      ),
+      false,
+    );
+    assert.deepEqual(prisma.calls.profileValueFindMany[0].where.attributeId, {
+      in: [1, 2],
+    });
+    assert.equal(prisma.calls.textCompletenessQueries.length, 1);
+    assert.match(
+      prisma.calls.textCompletenessQueries[0].text,
+      /SELECT "attributeId", COUNT\(\*\)::integer AS "filledCount"/,
+    );
+    assert.match(
+      prisma.calls.textCompletenessQueries[0].text,
+      /btrim\("textValue"\) <> ''/,
+    );
+    assert.deepEqual(prisma.calls.textCompletenessQueries[0].values, [
+      ...users,
+      3,
+    ]);
+    assert.deepEqual(prisma.calls.textCompletenessResults, [
+      [{ attributeId: 3, filledCount: 2 }],
+    ]);
+    assert.deepEqual(
+      Object.keys(prisma.calls.textCompletenessResults[0][0]).sort(),
+      ["attributeId", "filledCount"],
+    );
   });
 });
 

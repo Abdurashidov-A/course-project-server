@@ -1,4 +1,5 @@
 const express = require("express");
+const { Prisma } = require("@prisma/client");
 const prisma = require("../lib/prisma");
 const defaultTokenService = require("../integrations/odooService");
 
@@ -231,10 +232,16 @@ function buildImageStatistics(values, publishedCvCount) {
   };
 }
 
+function buildTextStatistics(filledCount, publishedCvCount) {
+  return {
+    kind: "COMPLETENESS",
+    ...buildCounts(filledCount, publishedCvCount),
+  };
+}
+
 function hasAnySafeValue(value) {
   return (
     isNonEmptyString(value.stringValue) ||
-    isNonEmptyString(value.textValue) ||
     toFiniteNumber(value.numericValue) !== null ||
     typeof value.booleanValue === "boolean" ||
     toValidDate(value.dateValue) !== null ||
@@ -254,7 +261,7 @@ function buildFallbackStatistics(values, publishedCvCount) {
   };
 }
 
-function buildStatistics(type, values, publishedCvCount) {
+function buildStatistics(type, values, publishedCvCount, textFilledCount = 0) {
   if (type === "NUMERIC") {
     return buildNumericStatistics(values, publishedCvCount);
   }
@@ -272,11 +279,7 @@ function buildStatistics(type, values, publishedCvCount) {
   }
 
   if (type === "TEXT") {
-    return buildPopularValuesStatistics(
-      values,
-      publishedCvCount,
-      "textValue",
-    );
+    return buildTextStatistics(textFilledCount, publishedCvCount);
   }
 
   if (type === "DATE") {
@@ -292,6 +295,32 @@ function buildStatistics(type, values, publishedCvCount) {
   }
 
   return buildFallbackStatistics(values, publishedCvCount);
+}
+
+async function loadTextFilledCounts(
+  prismaClient,
+  userIds,
+  textAttributeIds,
+) {
+  if (userIds.length === 0 || textAttributeIds.length === 0) {
+    return new Map();
+  }
+
+  const rows = await prismaClient.$queryRaw(
+    Prisma.sql`
+      SELECT "attributeId", COUNT(*)::integer AS "filledCount"
+      FROM "ProfileAttributeValue"
+      WHERE "userId" IN (${Prisma.join(userIds)})
+        AND "attributeId" IN (${Prisma.join(textAttributeIds)})
+        AND "textValue" IS NOT NULL
+        AND btrim("textValue") <> ''
+      GROUP BY "attributeId"
+    `,
+  );
+
+  return new Map(
+    rows.map((row) => [Number(row.attributeId), Number(row.filledCount)]),
+  );
 }
 
 function groupValuesByAttribute(profileValues, userIds, attributeIds) {
@@ -340,7 +369,6 @@ function createOdooExternalRouter(options = {}) {
     userId: true,
     attributeId: true,
     stringValue: true,
-    textValue: true,
     numericValue: true,
     booleanValue: true,
     dateValue: true,
@@ -416,21 +444,34 @@ function createOdooExternalRouter(options = {}) {
       const attributeIds = positionAttributes.map(
         (positionAttribute) => positionAttribute.attributeId,
       );
+      const textAttributeIds = positionAttributes
+        .filter(
+          (positionAttribute) => positionAttribute.attribute.type === "TEXT",
+        )
+        .map((positionAttribute) => positionAttribute.attributeId);
+      const nonTextAttributeIds = attributeIds.filter(
+        (attributeId) => !textAttributeIds.includes(attributeId),
+      );
       let profileValues = [];
 
-      if (userIds.length > 0 && attributeIds.length > 0) {
+      if (userIds.length > 0 && nonTextAttributeIds.length > 0) {
         profileValues = await prismaClient.profileAttributeValue.findMany({
           where: {
             userId: {
               in: userIds,
             },
             attributeId: {
-              in: attributeIds,
+              in: nonTextAttributeIds,
             },
           },
           select: profileValueSelect,
         });
       }
+      const textFilledCounts = await loadTextFilledCounts(
+        prismaClient,
+        userIds,
+        textAttributeIds,
+      );
 
       const valuesByAttributeId = groupValuesByAttribute(
         profileValues,
@@ -455,6 +496,7 @@ function createOdooExternalRouter(options = {}) {
             positionAttribute.attribute.type,
             valuesByAttributeId.get(positionAttribute.attributeId) || [],
             publishedCvCount,
+            textFilledCounts.get(positionAttribute.attributeId) || 0,
           ),
         })),
       });
