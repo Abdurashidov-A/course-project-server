@@ -350,6 +350,8 @@ function createOdooExternalRouter(options = {}) {
   };
 
   router.get("/position", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+
     try {
       const rawToken = getBearerToken(req);
 
@@ -437,7 +439,6 @@ function createOdooExternalRouter(options = {}) {
       );
       const publishedCvCount = publishedCvs.length;
 
-      res.set("Cache-Control", "no-store");
       return res.json({
         position: tokenRecord.position,
         dataset: {

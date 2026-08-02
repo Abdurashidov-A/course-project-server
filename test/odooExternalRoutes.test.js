@@ -420,6 +420,7 @@ test("rejects every invalid authentication form with the same safe 401 response"
     results.forEach((result) => {
       assert.equal(result.status, 401);
       assert.deepEqual(result.body, AUTH_ERROR);
+      assert.equal(result.headers["cache-control"], "no-store");
     });
   });
 
@@ -436,6 +437,7 @@ test("rejects every invalid authentication form with the same safe 401 response"
 
     assert.equal(result.status, 401);
     assert.deepEqual(result.body, AUTH_ERROR);
+    assert.equal(result.headers["cache-control"], "no-store");
   });
 });
 
@@ -1034,6 +1036,7 @@ test("returns a generic 500 and logs only sanitized metadata", async () => {
       assert.deepEqual(result.body, {
         message: "Failed to load Odoo position results",
       });
+      assert.equal(result.headers["cache-control"], "no-store");
       assert.equal(JSON.stringify(result.body).includes("internal"), false);
       assert.equal(JSON.stringify(result.body).includes("PositionOdooToken"), false);
     });
