@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="cvms_position_import_wizard_view_form" model="ir.ui.view">
+        <field name="name">cvms.position.import.wizard.form</field>
+        <field name="model">cvms.position.import.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Import CVMS Position">
+                <group>
+                    <field name="base_url" placeholder="https://cvms.example.com"/>
+                    <field
+                        name="api_token"
+                        password="True"
+                        placeholder="cvms_odoo_..."
+                    />
+                </group>
+                <group invisible="not result_message">
+                    <field name="result_state" readonly="1"/>
+                    <field name="result_message" readonly="1"/>
+                </group>
+                <footer>
+                    <button
+                        name="action_import"
+                        string="Import"
+                        type="object"
+                        class="btn-primary"
+                    />
+                    <button string="Close" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="cvms_position_import_wizard_action" model="ir.actions.act_window">
+        <field name="name">Import CVMS Position</field>
+        <field name="res_model">cvms.position.import.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <menuitem
+        id="cvms_menu_import_position"
+        name="Import Position"
+        parent="cvms_menu_root"
+        action="cvms_position_import_wizard_action"
+        groups="base.group_system"
+        sequence="5"
+    />
+</odoo>

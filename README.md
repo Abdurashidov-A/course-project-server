@@ -149,6 +149,57 @@ combines those values with the user's built-in name and email, then finds or
 creates a Salesforce Account and linked Contact. Repeating the same submission
 reuses the existing records.
 
+## Odoo Integration
+
+The `odoo/` directory contains a local Odoo 19 application backed by PostgreSQL
+16. The `cvms_odoo_integration` module imports read-only aggregate statistics for
+one CVMS position at a time.
+
+Create a local configuration from the safe example and start the services:
+
+```bash
+cd server/odoo
+cp .env.example .env
+docker compose -p cvms-odoo up -d db web
+```
+
+Install the module in a new Odoo database with `-i`, or update an existing
+installation with `-u`:
+
+```bash
+docker compose -p cvms-odoo run --rm web odoo server \
+  -d <odoo_database> \
+  -u cvms_odoo_integration \
+  --without-demo \
+  --stop-after-init \
+  --no-http
+```
+
+Run the targeted module tests in the isolated local test database:
+
+```bash
+docker compose -p cvms-odoo run --rm web odoo server \
+  -d cvms_odoo_integration_test \
+  -u cvms_odoo_integration \
+  --without-demo \
+  --test-enable \
+  --test-tags /cvms_odoo_integration \
+  --stop-after-init \
+  --no-http \
+  --log-level=test
+```
+
+Open Odoo at `http://127.0.0.1:8069`. A system administrator can open
+**CVMS Statistics → Import Position** and manually enter the CVMS base URL and
+the masked API-token field. Recruiters or administrators create this token for
+a specific position in CVMS. The token must not be stored in `.env` or shared in
+logs.
+
+Odoo imports only aggregate, read-only position statistics. Candidate identity,
+personal data, raw `TEXT` values, and CV snapshots are not imported. When CVMS
+runs on the Docker host, use the Docker host gateway rather than `127.0.0.1`,
+because container-local loopback does not refer to the host backend.
+
 ## Demo Accounts
 
 - Candidate: `candidate@test.com`

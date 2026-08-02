@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="cvms_position_view_list" model="ir.ui.view">
+        <field name="name">cvms.position.list</field>
+        <field name="model">cvms.position</field>
+        <field name="arch" type="xml">
+            <list string="Imported Positions" create="false" edit="false" delete="false">
+                <field name="title"/>
+                <field name="external_position_id"/>
+                <field name="published_cv_count"/>
+                <field name="imported_at"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="cvms_position_view_form" model="ir.ui.view">
+        <field name="name">cvms.position.form</field>
+        <field name="model">cvms.position</field>
+        <field name="arch" type="xml">
+            <form string="Imported Position" create="false" edit="false" delete="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="title"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="external_position_id"/>
+                            <field name="cv_status"/>
+                        </group>
+                        <group>
+                            <field name="published_cv_count"/>
+                            <field name="imported_at"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Attributes" name="attributes">
+                            <field name="attribute_ids" mode="list,form" readonly="1">
+                                <list create="false" edit="false" delete="false">
+                                    <field name="sort_order"/>
+                                    <field name="title"/>
+                                    <field name="attribute_type"/>
+                                    <field name="is_required"/>
+                                    <field name="statistics_kind"/>
+                                    <field name="filled_count"/>
+                                    <field name="missing_count"/>
+                                    <field name="true_count" invisible="statistics_kind != 'BOOLEAN'"/>
+                                    <field name="false_count" invisible="statistics_kind != 'BOOLEAN'"/>
+                                    <field name="average_value" invisible="statistics_kind != 'NUMERIC'"/>
+                                    <field name="minimum_value" invisible="statistics_kind != 'NUMERIC'"/>
+                                    <field name="maximum_value" invisible="statistics_kind != 'NUMERIC'"/>
+                                    <field name="earliest_date" invisible="statistics_kind != 'DATE_RANGE'"/>
+                                    <field name="latest_date" invisible="statistics_kind != 'DATE_RANGE'"/>
+                                    <field name="earliest_period_start" invisible="statistics_kind != 'PERIOD_RANGE'"/>
+                                    <field name="latest_period_end" invisible="statistics_kind != 'PERIOD_RANGE'"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="cvms_position_attribute_view_form" model="ir.ui.view">
+        <field name="name">cvms.position.attribute.form</field>
+        <field name="model">cvms.position.attribute</field>
+        <field name="arch" type="xml">
+            <form string="Position Attribute" create="false" edit="false" delete="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="title"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="position_id"/>
+                            <field name="external_attribute_id"/>
+                            <field name="attribute_type"/>
+                            <field name="is_required"/>
+                            <field name="sort_order"/>
+                            <field name="statistics_kind"/>
+                        </group>
+                        <group>
+                            <field name="filled_count"/>
+                            <field name="missing_count"/>
+                        </group>
+                    </group>
+                    <group string="Boolean Statistics" invisible="statistics_kind != 'BOOLEAN'">
+                        <group>
+                            <field name="true_count"/>
+                            <field name="false_count"/>
+                        </group>
+                    </group>
+                    <group string="Numeric Statistics" invisible="statistics_kind != 'NUMERIC'">
+                        <group>
+                            <field name="average_value"/>
+                            <field name="minimum_value"/>
+                            <field name="maximum_value"/>
+                        </group>
+                    </group>
+                    <group string="Date Range" invisible="statistics_kind != 'DATE_RANGE'">
+                        <group>
+                            <field name="earliest_date"/>
+                            <field name="latest_date"/>
+                        </group>
+                    </group>
+                    <group string="Period Range" invisible="statistics_kind != 'PERIOD_RANGE'">
+                        <group>
+                            <field name="earliest_period_start"/>
+                            <field name="latest_period_end"/>
+                        </group>
+                    </group>
+                    <notebook invisible="statistics_kind != 'POPULAR_VALUES'">
+                        <page string="Popular Values" name="popular_values">
+                            <field name="popular_value_ids" mode="list,form" readonly="1">
+                                <list create="false" edit="false" delete="false">
+                                    <field name="value"/>
+                                    <field name="count"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="cvms_position_attribute_popular_value_view_form" model="ir.ui.view">
+        <field name="name">cvms.position.attribute.popular.value.form</field>
+        <field name="model">cvms.position.attribute.popular.value</field>
+        <field name="arch" type="xml">
+            <form string="Popular Value" create="false" edit="false" delete="false">
+                <sheet>
+                    <group>
+                        <field name="attribute_id"/>
+                        <field name="value"/>
+                        <field name="count"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="cvms_position_action" model="ir.actions.act_window">
+        <field name="name">Imported Positions</field>
+        <field name="res_model">cvms.position</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Positions will appear here after import through an API token.
+            </p>
+        </field>
+    </record>
+
+    <menuitem
+        id="cvms_menu_root"
+        name="CVMS Statistics"
+        sequence="10"
+    />
+    <menuitem
+        id="cvms_menu_imported_positions"
+        name="Imported Positions"
+        parent="cvms_menu_root"
+        action="cvms_position_action"
+        sequence="10"
+    />
+</odoo>

@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_cvms_position_user,cvms.position user,model_cvms_position,base.group_user,1,0,0,0
+access_cvms_position_attribute_user,cvms.position.attribute user,model_cvms_position_attribute,base.group_user,1,0,0,0
+access_cvms_position_attribute_popular_value_user,cvms.position.attribute.popular.value user,model_cvms_position_attribute_popular_value,base.group_user,1,0,0,0
+access_cvms_position_import_wizard_system,cvms.position.import.wizard system,model_cvms_position_import_wizard,base.group_system,1,1,1,1
