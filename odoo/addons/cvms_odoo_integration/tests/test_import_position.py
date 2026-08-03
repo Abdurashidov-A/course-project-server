@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 import requests
 
@@ -454,3 +455,117 @@ class TestCvmsPositionImport(TransactionCase):
             self.env["cvms.position.import.wizard"].with_user(user).create(
                 {"base_url": "https://cvms.example.test", "api_token": API_TOKEN}
             )
+
+    def test_read_only_navigation_views_actions_and_acl(self):
+        root_menu = self.env.ref("cvms_odoo_integration.cvms_menu_root")
+        position_menu = self.env.ref(
+            "cvms_odoo_integration.cvms_menu_imported_positions"
+        )
+        attribute_menu = self.env.ref(
+            "cvms_odoo_integration.cvms_menu_attributes"
+        )
+        statistics_menu = self.env.ref(
+            "cvms_odoo_integration.cvms_menu_statistics"
+        )
+        import_menu = self.env.ref(
+            "cvms_odoo_integration.cvms_menu_import_position"
+        )
+
+        self.assertFalse(root_menu.action)
+        self.assertEqual(position_menu.parent_id, root_menu)
+        self.assertEqual(attribute_menu.parent_id, root_menu)
+        self.assertEqual(statistics_menu.parent_id, root_menu)
+        self.assertEqual(import_menu.parent_id, root_menu)
+        child_menus = self.env["ir.ui.menu"].search(
+            [("parent_id", "=", root_menu.id)],
+            order="sequence, id",
+        )
+        self.assertEqual(child_menus[0], position_menu)
+        self.assertGreater(import_menu.sequence, statistics_menu.sequence)
+
+        expected_actions = {
+            "cvms_odoo_integration.cvms_position_action": (
+                "cvms.position",
+                "cvms_odoo_integration.cvms_position_view_list",
+            ),
+            "cvms_odoo_integration.cvms_position_attribute_action": (
+                "cvms.position.attribute",
+                "cvms_odoo_integration.cvms_position_attribute_view_list",
+            ),
+            "cvms_odoo_integration.cvms_position_statistics_action": (
+                "cvms.position.attribute",
+                "cvms_odoo_integration.cvms_position_attribute_statistics_view_list",
+            ),
+        }
+        for action_xml_id, (model_name, list_view_xml_id) in expected_actions.items():
+            with self.subTest(action=action_xml_id):
+                action = self.env.ref(action_xml_id)
+                self.assertEqual(action.res_model, model_name)
+                self.assertEqual(action.view_mode, "list,form")
+                self.assertEqual(action.view_id, self.env.ref(list_view_xml_id))
+                self.assertIn(model_name, self.env.registry.models)
+
+        import_action = self.env.ref(
+            "cvms_odoo_integration.cvms_position_import_wizard_action"
+        )
+        self.assertEqual(import_action.res_model, "cvms.position.import.wizard")
+        self.assertEqual(import_action.view_mode, "form")
+        self.assertEqual(import_action.target, "new")
+        self.assertIn(self.env.ref("base.group_system"), import_menu.group_ids)
+
+        read_only_views = {
+            "cvms_odoo_integration.cvms_position_view_list": "list",
+            "cvms_odoo_integration.cvms_position_view_form": "form",
+            "cvms_odoo_integration.cvms_position_attribute_view_list": "list",
+            "cvms_odoo_integration.cvms_position_attribute_statistics_view_list": "list",
+            "cvms_odoo_integration.cvms_position_attribute_view_form": "form",
+            "cvms_odoo_integration.cvms_position_attribute_popular_value_view_list": "list",
+            "cvms_odoo_integration.cvms_position_attribute_popular_value_view_form": "form",
+        }
+        forbidden_fields = {
+            "api_token",
+            "token",
+            "token_hash",
+            "management_credential",
+            "authorization",
+            "text_value",
+            "raw_text",
+            "candidate_id",
+            "user_id",
+            "email",
+        }
+        for view_xml_id, root_tag in read_only_views.items():
+            with self.subTest(view=view_xml_id):
+                view = self.env.ref(view_xml_id)
+                arch = ElementTree.fromstring(view.arch_db)
+                self.assertEqual(arch.tag, root_tag)
+                self.assertEqual(arch.attrib.get("create"), "false")
+                self.assertEqual(arch.attrib.get("edit"), "false")
+                self.assertEqual(arch.attrib.get("delete"), "false")
+                self.assertIn(view.model, self.env.registry.models)
+                field_names = {
+                    field.attrib["name"]
+                    for field in arch.iter("field")
+                    if "name" in field.attrib
+                }
+                self.assertFalse(field_names & forbidden_fields)
+
+        persistent_acl = {
+            "cvms_odoo_integration.access_cvms_position_user",
+            "cvms_odoo_integration.access_cvms_position_attribute_user",
+            "cvms_odoo_integration.access_cvms_position_attribute_popular_value_user",
+        }
+        internal_group = self.env.ref("base.group_user")
+        for acl_xml_id in persistent_acl:
+            with self.subTest(acl=acl_xml_id):
+                acl = self.env.ref(acl_xml_id)
+                self.assertEqual(acl.group_id, internal_group)
+                self.assertTrue(acl.perm_read)
+                self.assertFalse(acl.perm_write)
+                self.assertFalse(acl.perm_create)
+                self.assertFalse(acl.perm_unlink)
+
+        wizard_acl = self.env.ref(
+            "cvms_odoo_integration.access_cvms_position_import_wizard_system"
+        )
+        self.assertEqual(wizard_acl.group_id, self.env.ref("base.group_system"))

@@ -128,6 +128,48 @@
         </field>
     </record>
 
+    <record id="cvms_position_attribute_view_list" model="ir.ui.view">
+        <field name="name">cvms.position.attribute.list</field>
+        <field name="model">cvms.position.attribute</field>
+        <field name="arch" type="xml">
+            <list string="Imported Attributes" create="false" edit="false" delete="false">
+                <field name="position_id"/>
+                <field name="sort_order"/>
+                <field name="title"/>
+                <field name="external_attribute_id"/>
+                <field name="attribute_type"/>
+                <field name="is_required"/>
+                <field name="statistics_kind"/>
+                <field name="filled_count"/>
+                <field name="missing_count"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="cvms_position_attribute_statistics_view_list" model="ir.ui.view">
+        <field name="name">cvms.position.attribute.statistics.list</field>
+        <field name="model">cvms.position.attribute</field>
+        <field name="arch" type="xml">
+            <list string="Imported Statistics" create="false" edit="false" delete="false">
+                <field name="position_id"/>
+                <field name="title"/>
+                <field name="attribute_type"/>
+                <field name="statistics_kind"/>
+                <field name="filled_count"/>
+                <field name="missing_count"/>
+                <field name="true_count" optional="hide"/>
+                <field name="false_count" optional="hide"/>
+                <field name="average_value" optional="show"/>
+                <field name="minimum_value" optional="hide"/>
+                <field name="maximum_value" optional="hide"/>
+                <field name="earliest_date" optional="hide"/>
+                <field name="latest_date" optional="hide"/>
+                <field name="earliest_period_start" optional="hide"/>
+                <field name="latest_period_end" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
     <record id="cvms_position_attribute_popular_value_view_form" model="ir.ui.view">
         <field name="name">cvms.position.attribute.popular.value.form</field>
         <field name="model">cvms.position.attribute.popular.value</field>
@@ -144,15 +186,42 @@
         </field>
     </record>
 
+    <record id="cvms_position_attribute_popular_value_view_list" model="ir.ui.view">
+        <field name="name">cvms.position.attribute.popular.value.list</field>
+        <field name="model">cvms.position.attribute.popular.value</field>
+        <field name="arch" type="xml">
+            <list string="Popular Values" create="false" edit="false" delete="false">
+                <field name="attribute_id"/>
+                <field name="value"/>
+                <field name="count"/>
+            </list>
+        </field>
+    </record>
+
     <record id="cvms_position_action" model="ir.actions.act_window">
-        <field name="name">Imported Positions</field>
+        <field name="name">Positions</field>
         <field name="res_model">cvms.position</field>
         <field name="view_mode">list,form</field>
+        <field name="view_id" ref="cvms_position_view_list"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 Positions will appear here after import through an API token.
             </p>
         </field>
+    </record>
+
+    <record id="cvms_position_attribute_action" model="ir.actions.act_window">
+        <field name="name">Attributes</field>
+        <field name="res_model">cvms.position.attribute</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="cvms_position_attribute_view_list"/>
+    </record>
+
+    <record id="cvms_position_statistics_action" model="ir.actions.act_window">
+        <field name="name">Statistics</field>
+        <field name="res_model">cvms.position.attribute</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="cvms_position_attribute_statistics_view_list"/>
     </record>
 
     <menuitem
@@ -162,9 +231,23 @@
     />
     <menuitem
         id="cvms_menu_imported_positions"
-        name="Imported Positions"
+        name="Positions"
         parent="cvms_menu_root"
         action="cvms_position_action"
+        sequence="5"
+    />
+    <menuitem
+        id="cvms_menu_attributes"
+        name="Attributes"
+        parent="cvms_menu_root"
+        action="cvms_position_attribute_action"
         sequence="10"
+    />
+    <menuitem
+        id="cvms_menu_statistics"
+        name="Statistics"
+        parent="cvms_menu_root"
+        action="cvms_position_statistics_action"
+        sequence="20"
     />
 </odoo>

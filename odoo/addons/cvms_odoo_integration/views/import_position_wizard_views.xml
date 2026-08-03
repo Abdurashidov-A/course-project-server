@@ -43,6 +43,6 @@
         parent="cvms_menu_root"
         action="cvms_position_import_wizard_action"
         groups="base.group_system"
-        sequence="5"
+        sequence="40"
     />
 </odoo>

@@ -1,6 +1,6 @@
 {
     "name": "CVMS Position Statistics",
-    "version": "19.0.1.2.0",
+    "version": "19.0.1.3.0",
     "category": "Human Resources",
     "summary": "Read-only viewer for imported CVMS position statistics",
     "depends": ["base"],
