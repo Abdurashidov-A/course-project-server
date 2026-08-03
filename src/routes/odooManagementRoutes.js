@@ -1,9 +1,6 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const defaultTokenService = require("../integrations/odooService");
-const {
-  createOdooManagementCredentialMiddleware,
-} = require("../middleware/odooManagementCredential");
 
 const SAFE_TOKEN_SELECT = {
   tokenHint: true,
@@ -76,12 +73,6 @@ function createOdooManagementRouter(options = {}) {
   const router = express.Router();
   const prismaClient = options.prismaClient || prisma;
   const tokenService = options.tokenService || defaultTokenService;
-
-  router.use(
-    createOdooManagementCredentialMiddleware({
-      configuredCredential: options.managementCredential,
-    }),
-  );
 
   async function requireManager(req, res) {
     const userId = getDevUserId(req);

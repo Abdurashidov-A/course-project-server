@@ -30,7 +30,6 @@ app.use(
   "/api/positions",
   createOdooManagementRouter({
     prismaClient: prisma,
-    managementCredential: process.env.ODOO_MANAGEMENT_CREDENTIAL,
   }),
 );
 app.use("/api/cvs", cvRoutes);
