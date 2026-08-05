@@ -17,6 +17,9 @@ const {
   createOdooManagementRouter,
 } = require("./routes/odooManagementRoutes");
 const { createOdooExternalRouter } = require("./routes/odooExternalRoutes");
+const {
+  createSupportTicketRuntimeRouter,
+} = require("./services/supportTicketRuntime");
 const { serializeSafeUser } = require("./utils/safeUser");
 const app = express();
 
@@ -43,6 +46,13 @@ app.use("/api/integrations/salesforce", salesforceRoutes);
 app.use(
   "/api/integrations/odoo",
   createOdooExternalRouter({ prismaClient: prisma }),
+);
+app.use(
+  "/api/support-tickets",
+  createSupportTicketRuntimeRouter({
+    env: process.env,
+    prismaClient: prisma,
+  }),
 );
 
 app.get("/", (req, res) => {
